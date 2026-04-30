@@ -39,6 +39,15 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     world.player.targetX = clientX * dpr + world.camera.x
     world.player.targetY = clientY * dpr + world.camera.y
 
+    // First interaction spark
+    if (!world.firstInteraction) {
+      world.firstInteraction = true
+      addRipple(world, world.player.x, world.player.y)
+      if (audioRef.current) {
+        audioRef.current.start()
+      }
+    }
+
     // Check mute button hover
     const canvas = canvasRef.current
     if (canvas) {
@@ -275,6 +284,7 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   drawConnectionLines(ctx, world, w, h, cam)
   drawParticlesForLayer(ctx, world, 1, cam, w, h)
   drawGrass(ctx, world, h, cam, w)
+  drawFragments(ctx, world, cam, w, h)
   drawEntities(ctx, world, cam, w, h)
   drawDeathParticles(ctx, world, cam, w, h)
   drawBeautyBlooms(ctx, world, cam, w, h)
@@ -299,6 +309,7 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   }
 
   drawKarmaOverlay(ctx, w, h, world)
+  drawLookCloserNudge(ctx, w, h, world)
 }
 
 type Camera = { x: number; y: number }
@@ -494,16 +505,29 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
 
     const strokeW = 1.5 * s + effectiveHeight * 0.008
 
+    // Gravitational shimmer: grass near hidden nav nodes glows warmer
+    let navGlow = 0
+    for (let n = 0; n < world.navNodes.length; n++) {
+      const node = world.navNodes[n]
+      const ndx = blade.x - node.x
+      const ndy = tipY - node.y
+      const ndist = Math.sqrt(ndx * ndx + ndy * ndy)
+      if (ndist < 100 * s) {
+        navGlow = Math.max(navGlow, (1 - ndist / (100 * s)) * 0.3)
+      }
+    }
+
     // Determine if this blade should be luminous based on karma
-    const isLuminous = blade.luminous || (blade.phase / (Math.PI * 2)) < luminousThreshold
+    const isLuminous = blade.luminous || (blade.phase / (Math.PI * 2)) < luminousThreshold || navGlow > 0.1
 
     if (isLuminous && !corruptFactor) {
       const glowPulse = 0.4 + Math.sin(time * 1.8 + blade.phase) * 0.3 + Math.sin(time * 0.7 + blade.phase * 2) * 0.2
 
-      const glowSize = (18 + glowPulse * 12 + beautyFactor * 8) * s
+      const glowSize = (18 + glowPulse * 12 + beautyFactor * 8 + navGlow * 10) * s
+      const navWarmth = navGlow > 0 ? navGlow * 15 : 0
       ctx.beginPath()
       ctx.arc(tipX, tipY, glowSize, 0, Math.PI * 2)
-      ctx.fillStyle = `hsla(${blade.hue}, 75%, 60%, ${(0.08 + glowPulse * 0.12) * (1 + beautyFactor * 0.5)})`
+      ctx.fillStyle = `hsla(${blade.hue - navWarmth}, 75%, ${60 + navGlow * 15}%, ${(0.08 + glowPulse * 0.12 + navGlow * 0.06) * (1 + beautyFactor * 0.5)})`
       ctx.fill()
 
       ctx.beginPath()
@@ -1063,6 +1087,44 @@ function drawGroundScars(ctx: CanvasRenderingContext2D, world: WorldState, cam: 
     }
     ctx.fill()
   }
+}
+
+function drawFragments(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
+  const s = world.scale
+  const beautyWarmth = world.smoothKarma.beauty * 20
+
+  for (let i = 0; i < world.fragments.length; i++) {
+    const f = world.fragments[i]
+    if (f.alpha < 0.01) continue
+    if (!onScreen(f.x, f.y, cam, w, h, 200)) continue
+
+    ctx.save()
+    ctx.font = `${Math.round(14 * s)}px monospace`
+    ctx.textAlign = 'center'
+    ctx.fillStyle = `hsla(${180 - beautyWarmth}, 40%, 70%, ${f.alpha})`
+    ctx.fillText(f.text, f.x, f.y)
+    ctx.restore()
+  }
+}
+
+function drawLookCloserNudge(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
+  if (world.time < 20) return
+  const anyRevealed = world.navNodes.some(n => n.revealed > 0.7)
+  if (anyRevealed) return
+
+  // Fade in over 3 seconds after 20s mark
+  const fadeProgress = Math.min(1, (world.time - 20) / 3)
+  const alpha = 0.25 * fadeProgress
+
+  const dpr = window.devicePixelRatio || 1
+  const s = world.scale
+
+  ctx.save()
+  ctx.font = `${Math.round(11 * s)}px monospace`
+  ctx.textAlign = 'center'
+  ctx.fillStyle = `rgba(180, 200, 190, ${alpha})`
+  ctx.fillText('l o o k   c l o s e r', w / 2, h - 40 * dpr)
+  ctx.restore()
 }
 
 function drawMuteGlyph(ctx: CanvasRenderingContext2D, w: number, h: number, muted: boolean, hovering: boolean) {

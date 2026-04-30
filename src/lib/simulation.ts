@@ -140,6 +140,17 @@ export type NavNode = {
   route: string
 }
 
+export type TextFragment = {
+  text: string
+  x: number
+  y: number
+  alpha: number
+  maxAlpha: number
+  lifetime: number
+  phase: 'fadein' | 'hold' | 'fadeout'
+  drift: number
+}
+
 export type WorldState = {
   player: Player
   entities: Entity[]
@@ -153,6 +164,7 @@ export type WorldState = {
   beautyBlooms: BeautyBloom[]
   connectionLines: ConnectionLine[]
   groundScars: GroundScar[]
+  fragments: TextFragment[]
   mood: CosmicMood
   karma: KarmaState
   camera: { x: number; y: number }
@@ -181,10 +193,15 @@ export type WorldState = {
   clickCooldown: number
   lastBloomTime: number
   lastSpawnTime: number
+  lastFragmentTime: number
+  shownFragments: Set<string>
   transcendenceTimer: number
   transcendenceActive: boolean
   transcendenceCooldown: number
   entityIdCounter: number
+  firstInteraction: boolean
+  reducedMotion: boolean
+  nearNavNodeMissed: boolean
 }
 
 export const ENTITY_COLORS: Record<EntityKind, { r: number; g: number; b: number; hue: number }> = {
@@ -279,8 +296,10 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
   const densityScale = Math.min(1, area / (1920 * 1080 * 4))
   const isMobile = 'ontouchstart' in window || window.innerWidth < 768
   const mobileScale = isMobile ? 0.6 : 1
+  const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const motionScale = reducedMotion ? 0.5 : 1
   const grassCount = Math.floor((180 + mood.grassDensity * 70) * densityScale * mobileScale)
-  const particleCount = Math.floor((35 + mood.driftSpeed * 15) * densityScale * mobileScale)
+  const particleCount = Math.floor((35 + mood.driftSpeed * 15) * densityScale * mobileScale * motionScale)
 
   const grass: GrassBlade[] = []
   for (let i = 0; i < grassCount; i++) {
@@ -352,6 +371,7 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
     beautyBlooms: [],
     connectionLines: [],
     groundScars: [],
+    fragments: [],
     mood,
     karma,
     camera: { x: startX - viewportWidth / 2, y: startY - viewportHeight / 2 },
@@ -380,10 +400,15 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
     clickCooldown: 0.3,
     lastBloomTime: 0,
     lastSpawnTime: 0,
+    lastFragmentTime: -45,
+    shownFragments: new Set(),
     transcendenceTimer: 0,
     transcendenceActive: false,
     transcendenceCooldown: 0,
     entityIdCounter: entities.length,
+    firstInteraction: false,
+    reducedMotion: typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    nearNavNodeMissed: false,
   }
 }
 
@@ -711,6 +736,8 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   updateBeautyBlooms(state, dt)
   updateGroundScars(state, dt)
   updateSmoothKarma(state)
+  updateFragments(state, dt)
+  checkFragmentTriggers(state)
   periodicSave(state, dt)
 }
 
@@ -742,6 +769,7 @@ function updateNavNodes(state: WorldState, dt: number): void {
     } else if (dist < hintRadius) {
       node.revealed = Math.max(0, node.revealed - dt * 0.03)
     } else {
+      if (node.revealed > 0.2) state.nearNavNodeMissed = true
       node.revealed = Math.max(0, node.revealed - dt * 0.08)
     }
   }
@@ -934,7 +962,8 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
       }
     }
 
-    const speed = e.kind === 'corruptor' ? 0.3 : e.kind === 'fragile' ? 0.4 : 0.6
+    const baseSpeed = e.kind === 'corruptor' ? 0.3 : e.kind === 'fragile' ? 0.4 : 0.6
+    const speed = state.reducedMotion ? baseSpeed * 0.5 : baseSpeed
     e.vx += (noiseX + seekX + windEffect) * dt * 2
     e.vy += (noiseY + seekY) * dt * 2
 
@@ -1284,13 +1313,14 @@ function addBeautyBloom(state: WorldState, x: number, y: number, maxR: number): 
 function updateGrass(state: WorldState, _dt: number, _viewportHeight: number): void {
   const { player, mood } = state
   const s = state.scale
+  const animSpeed = state.reducedMotion ? 0 : 1
   const windTime = state.time * (0.6 + mood.windStrength * 1.0)
 
   for (let i = 0; i < state.grass.length; i++) {
     const blade = state.grass[i]
-    const wind1 = Math.sin(windTime + blade.phase) * (0.2 + mood.windStrength * 0.15)
-    const wind2 = Math.sin(windTime * 0.7 + blade.phase * 1.3 + 1.2) * 0.08
-    const wind3 = Math.sin(windTime * 0.3 + blade.x * 0.003) * 0.06
+    const wind1 = Math.sin(windTime + blade.phase) * (0.2 + mood.windStrength * 0.15) * animSpeed
+    const wind2 = Math.sin(windTime * 0.7 + blade.phase * 1.3 + 1.2) * 0.08 * animSpeed
+    const wind3 = Math.sin(windTime * 0.3 + blade.x * 0.003) * 0.06 * animSpeed
     const wind = wind1 + wind2 + wind3
 
     const dx = blade.x - player.x
@@ -1370,6 +1400,107 @@ function updateSmoothKarma(state: WorldState): void {
   sk.hostility += (k.hostility - sk.hostility) * lerpRate
   sk.corruption += (k.corruption - sk.corruption) * lerpRate
   sk.navigability += (k.navigability - sk.navigability) * lerpRate
+}
+
+function updateFragments(state: WorldState, dt: number): void {
+  for (let i = state.fragments.length - 1; i >= 0; i--) {
+    const f = state.fragments[i]
+    f.lifetime -= dt
+    f.x += f.drift * dt
+
+    if (f.lifetime > 8) {
+      f.phase = 'fadein'
+      f.alpha = f.maxAlpha * ((10 - f.lifetime) / 2) // 0→maxAlpha over 2s
+    } else if (f.lifetime > 3) {
+      f.phase = 'hold'
+      f.alpha = f.maxAlpha
+    } else {
+      f.phase = 'fadeout'
+      f.alpha = f.maxAlpha * (f.lifetime / 3) // maxAlpha→0 over 3s
+    }
+
+    if (f.lifetime <= 0 || f.alpha < 0.01) {
+      state.fragments.splice(i, 1)
+    }
+  }
+}
+
+function spawnFragment(state: WorldState, text: string): void {
+  if (state.fragments.length > 0) return
+  if (state.shownFragments.has(text)) return
+  if (state.time - state.lastFragmentTime < 45) return
+  if (!state.player.alive) return
+
+  state.shownFragments.add(text)
+  state.lastFragmentTime = state.time
+  state.fragments.push({
+    text,
+    x: state.player.x + (Math.random() - 0.5) * 200,
+    y: state.player.y - 60 + (Math.random() - 0.5) * 60,
+    alpha: 0,
+    maxAlpha: 0.25,
+    lifetime: 10,
+    phase: 'fadein',
+    drift: (Math.random() - 0.5) * 0.15,
+  })
+}
+
+function checkFragmentTriggers(state: WorldState): void {
+  if (state.fragments.length > 0) return
+  if (!state.player.alive) return
+
+  const { karma, time, navNodes, player } = state
+  const anyRevealed = navNodes.some(n => n.revealed > 0.5)
+  const anyFound = navNodes.some(n => n.revealed >= 1.0)
+
+  if (karma.totalVisits <= 1 && time < 5) {
+    spawnFragment(state, 'arrival is a disturbance')
+  } else if (karma.totalVisits > 1 && time < 8) {
+    spawnFragment(state, 'the field remembers')
+  }
+
+  if (time > 15 && !anyRevealed) {
+    spawnFragment(state, 'look closer')
+  }
+
+  if (state.nearNavNodeMissed) {
+    spawnFragment(state, 'not everything surfaces')
+    state.nearNavNodeMissed = false
+  }
+
+  if (time > 40 && !anyFound) {
+    spawnFragment(state, 'some paths only appear when disturbed')
+  }
+
+  if (karma.beauty > 0.6 && player.stillness > 0.6) {
+    spawnFragment(state, 'memory made a shelter')
+  }
+
+  // 5+ entities within 200px
+  let nearbyCount = 0
+  const s = state.scale
+  for (let i = 0; i < state.entities.length; i++) {
+    const e = state.entities[i]
+    if (!e.alive) continue
+    const dx = e.x - player.x
+    const dy = e.y - player.y
+    if (dx * dx + dy * dy < (200 * s) * (200 * s)) nearbyCount++
+  }
+  if (nearbyCount >= 5 && karma.trust < 0.3) {
+    spawnFragment(state, 'density is not intimacy')
+  }
+
+  if (player.aggression > 0.6) {
+    spawnFragment(state, 'contact increases; meaning does not')
+  }
+
+  if (anyFound) {
+    spawnFragment(state, 'leave with what you find')
+  }
+
+  if (player.aggression > 0.5 && karma.beauty < 0.3) {
+    spawnFragment(state, 'not every system wants optimization')
+  }
 }
 
 function periodicSave(state: WorldState, dt: number): void {
