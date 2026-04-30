@@ -497,16 +497,10 @@ export class AudioEngine {
   update(params: AudioParams): void {
     if (!this.started || !this.ctx || this.disposed) return
 
-    // Resume if suspended (autoplay policy) — smooth fade-in to avoid gap
+    // Resume if suspended (autoplay policy) — just resume, don't restart gain from 0
+    // Restarting gain causes audible stops/starts
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume().then(() => {
-        if (this.master && !this.muted && this.ctx) {
-          const now = this.ctx.currentTime
-          this.master.gain.cancelScheduledValues(now)
-          this.master.gain.setValueAtTime(0, now)
-          this.master.gain.setTargetAtTime(0.2, now, 0.15)
-        }
-      })
+      this.ctx.resume()
     }
 
     const ctx = this.ctx
