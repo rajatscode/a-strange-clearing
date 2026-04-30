@@ -546,7 +546,7 @@ export class AudioEngine {
       } else {
         cutoff = 300 + warmth * 300 + params.beauty * 300
       }
-      this.droneFilter.frequency.setTargetAtTime(Math.max(60, cutoff), now, 0.5)
+      this.droneFilter.frequency.setTargetAtTime(Math.max(60, cutoff), now, 2.5)
 
       // Q: beautiful = gentle (1.0), corrupt = harsh narrow (4-6)
       const q = params.beauty > 0.6
@@ -554,7 +554,7 @@ export class AudioEngine {
         : params.corruption > 0.5
           ? 3.0 + params.corruption * 3.0
           : 1.5
-      this.droneFilter.Q.setTargetAtTime(q, now, 0.5)
+      this.droneFilter.Q.setTargetAtTime(q, now, 2.0)
 
       // Root frequencies shift based on state
       // Beautiful: D3 (146.8) + A3 (220) + D2 (73.4)
@@ -562,23 +562,23 @@ export class AudioEngine {
       // Hostile: drop pitch lower
       if (params.corruption > 0.5) {
         const corr = params.corruption
-        this.droneOscs[0]?.frequency.setTargetAtTime(82.4, now, 0.8)
-        this.droneOscs[1]?.frequency.setTargetAtTime(87.3 + corr * 5, now, 0.8) // beating minor 2nd
-        this.droneOscs[2]?.frequency.setTargetAtTime(116.5, now, 0.8) // tritone
+        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(82.4, now + 4.0)
+        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(87.3 + corr * 5, now + 4.0) // beating minor 2nd
+        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(116.5, now + 4.0) // tritone
         // Switch osc1 to triangle for harsher timbre
         if (this.droneOscs[1]) this.droneOscs[1].type = 'triangle'
       } else if (params.beauty > 0.6) {
-        this.droneOscs[0]?.frequency.setTargetAtTime(146.8, now, 0.8)
+        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(146.8, now + 4.0)
         // ±2 cents gentle chorus
-        this.droneOscs[1]?.frequency.setTargetAtTime(220.0 + 0.25, now, 0.8)
-        this.droneOscs[2]?.frequency.setTargetAtTime(73.4, now, 0.8)
+        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(220.0 + 0.25, now + 4.0)
+        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(73.4, now + 4.0)
         if (this.droneOscs[1]) this.droneOscs[1].type = 'sine'
       } else {
         // Neutral: gentle D root
         const hostDrop = params.hostility > 0.6 ? (params.hostility - 0.6) * 20 : 0
-        this.droneOscs[0]?.frequency.setTargetAtTime(146.8 - hostDrop, now, 0.8)
-        this.droneOscs[1]?.frequency.setTargetAtTime(220.0, now, 0.8)
-        this.droneOscs[2]?.frequency.setTargetAtTime(73.4, now, 0.8)
+        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(146.8 - hostDrop, now + 3.0)
+        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(220.0, now + 3.0)
+        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(73.4, now + 3.0)
         if (this.droneOscs[1]) this.droneOscs[1].type = 'sine'
       }
 
@@ -587,7 +587,7 @@ export class AudioEngine {
         const baseVol = i === 0 ? 0.10 : i === 1 ? 0.06 : 0.08
         const beautyBoost = params.beauty > 0.6 ? 1.0 + (params.beauty - 0.6) * 2.5 : 0.5 + params.beauty * 0.8
         const corruptionDrain = params.corruption > 0.5 ? 1.0 - (params.corruption - 0.5) * 0.4 : 1.0
-        this.droneGains[i].gain.setTargetAtTime(baseVol * beautyBoost * corruptionDrain, now, 0.3)
+        this.droneGains[i].gain.setTargetAtTime(baseVol * beautyBoost * corruptionDrain, now, 2.0)
       }
     }
 
@@ -597,12 +597,12 @@ export class AudioEngine {
       const subVol = needSubBass
         ? 0.04 + Math.max(params.corruption - 0.5, 0) * 0.08 + Math.max(params.hostility - 0.6, 0) * 0.06
         : 0
-      this.subBassGain.gain.setTargetAtTime(subVol, now, 0.5)
+      this.subBassGain.gain.setTargetAtTime(subVol, now, 2.5)
       // Corruption: 18-25Hz, Hostility: 25-35Hz
       const subFreq = params.corruption > params.hostility
         ? 18 + params.corruption * 7
         : 25 + params.hostility * 10
-      this.subBassOsc.frequency.setTargetAtTime(subFreq, now, 0.5)
+      this.subBassOsc.frequency.setTargetAtTime(subFreq, now, 2.5)
     }
 
     // --- Noise: beautiful = high gentle breeze, corrupt = low rumbling static ---
@@ -629,9 +629,9 @@ export class AudioEngine {
         windVol = 0.010 + params.corruption * 0.015 + params.mood.windStrength * 0.006
       }
 
-      this.noiseFilter.frequency.setTargetAtTime(windFreq, now, 0.8)
-      this.noiseFilter.Q.setTargetAtTime(Math.max(0.3, windQ), now, 0.5)
-      this.noiseGain.gain.setTargetAtTime(windVol, now, 0.5)
+      this.noiseFilter.frequency.setTargetAtTime(windFreq, now, 2.5)
+      this.noiseFilter.Q.setTargetAtTime(Math.max(0.3, windQ), now, 2.0)
+      this.noiseGain.gain.setTargetAtTime(windVol, now, 2.0)
     }
 
     // Hover shimmer

@@ -308,12 +308,10 @@ function onScreen(x: number, y: number, cam: Camera, w: number, h: number, margi
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
-  const { mood, karma } = world
+  const { mood, smoothKarma: karma } = world
 
-  // Dramatic karma influence on background
-  // Beauty: warm green-blue, brighter — like a clearing at dusk with bioluminescent life
-  // Corruption: sickly gray-green, desaturated, darker — like a dying swamp
-  const beautyHue = karma.beauty > 0.6 ? (karma.beauty - 0.6) * 60 : karma.beauty * 12 // up to +24 hue shift
+  // Dramatic karma influence on background (uses smoothed values for gradual transition)
+  const beautyHue = karma.beauty > 0.6 ? (karma.beauty - 0.6) * 60 : karma.beauty * 12
   const corruptHue = karma.corruption > 0.5 ? (karma.corruption - 0.5) * -40 : karma.corruption * -8
   const bShift = beautyHue + corruptHue
 
@@ -350,7 +348,7 @@ function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, wor
 }
 
 function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState, cam: Camera) {
-  const { mood, time, karma } = world
+  const { mood, time, smoothKarma: karma } = world
 
   // Fog responds to karma:
   // Beauty: warmer, golden/green tint, slightly thinner
@@ -403,7 +401,7 @@ function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: Wor
 }
 
 function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState, layer: number, cam: Camera, w: number, h: number) {
-  const { karma } = world
+  const { smoothKarma: karma } = world
   const layerScale = layer === 0 ? 0.6 : layer === 1 ? 1.0 : 1.5
   const alphaBase = layer === 0 ? 0.4 : layer === 1 ? 0.6 : 0.8
 
@@ -448,7 +446,7 @@ function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState,
 }
 
 function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number, cam: Camera, vpW: number) {
-  const { mood, karma, time } = world
+  const { mood, smoothKarma: karma, time } = world
   const s = world.scale
 
   // Dramatic karma influence on grass appearance
@@ -764,10 +762,14 @@ function drawWanderer(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number
 }
 
 function drawFragile(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, _s: number) {
-  const r = e.radius * (0.7 + e.energy * 0.3) * pulse
-  // Flickering — dim and unsteady
-  const flicker = 0.5 + Math.sin(time * 5 + e.phase) * 0.2 + Math.sin(time * 8.3 + e.phase * 2) * 0.15
-  const alpha = (0.2 + e.energy * 0.4) * flicker
+  // Shrink dramatically when drained
+  const energyScale = 0.4 + e.energy * 0.6
+  const r = e.radius * energyScale * pulse
+  // Flickering — more frantic when low energy
+  const flickerSpeed = e.energy < 0.3 ? 12 : 5
+  const flickerAmp = e.energy < 0.3 ? 0.35 : 0.2
+  const flicker = 0.5 + Math.sin(time * flickerSpeed + e.phase) * flickerAmp + Math.sin(time * 8.3 + e.phase * 2) * 0.15
+  const alpha = (0.15 + e.energy * 0.5) * flicker
 
   // Dim warm glow
   const haloR = r * 3
@@ -784,65 +786,80 @@ function drawFragile(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number;
 }
 
 function drawCooperator(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, _s: number, trustBoost: number) {
-  const r = e.radius * pulse * (1 + trustBoost * 0.2)
-  const alpha = 0.5 + e.energy * 0.3 + e.beauty * 0.2
+  const r = e.radius * pulse * (1 + trustBoost * 0.3)
+  const alpha = 0.6 + e.energy * 0.3 + e.beauty * 0.2
 
-  // Warm glow halo — larger and brighter
-  const haloR = r * 5
+  // Large warm bloom halo — 2x bigger, brighter
+  const haloR = r * 8
   ctx.beginPath()
   ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.1})`
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.08})`
+  ctx.fill()
+
+  // Secondary glow ring
+  const midR = r * 4
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, midR, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.12})`
   ctx.fill()
 
   // Core
   ctx.beginPath()
   ctx.arc(e.x, e.y, r, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.65})`
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.7})`
   ctx.fill()
 
-  // Inner glow
+  // Bright inner glow
   ctx.beginPath()
   ctx.arc(e.x, e.y, r * 0.5, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${Math.min(255, col.r + 80)}, ${Math.min(255, col.g + 40)}, ${Math.min(255, col.b + 60)}, ${alpha * 0.85})`
+  ctx.fillStyle = `rgba(${Math.min(255, col.r + 100)}, ${Math.min(255, col.g + 60)}, ${Math.min(255, col.b + 80)}, ${alpha * 0.9})`
   ctx.fill()
 }
 
 function drawDefector(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, _s: number) {
   const r = e.radius * pulse
-  const alpha = 0.4 + e.hostility * 0.3
+  const alpha = 0.5 + e.hostility * 0.35
 
-  // Angular halo
-  const haloR = r * 3.5
+  // Angry red halo — larger and more visible
+  const haloR = r * 4.5
   ctx.beginPath()
   ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.06})`
+  ctx.fillStyle = `rgba(240, 80, 40, ${alpha * 0.10})`
   ctx.fill()
 
-  // Angular core — hexagonal
+  // Angular core — hexagonal, larger
   ctx.beginPath()
   const sides = 6
   for (let j = 0; j <= sides; j++) {
     const a = (j / sides) * Math.PI * 2
-    const wobble = 1 + Math.sin(a * 2 + time * 3) * 0.15
+    const wobble = 1 + Math.sin(a * 2 + time * 3) * 0.20
     const px = e.x + Math.cos(a) * r * wobble
     const py = e.y + Math.sin(a) * r * wobble
     if (j === 0) ctx.moveTo(px, py)
     else ctx.lineTo(px, py)
   }
   ctx.closePath()
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.55})`
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.65})`
   ctx.fill()
 
-  // Red-amber center
+  // Bright red center — unmistakable
   ctx.beginPath()
-  ctx.arc(e.x, e.y, r * 0.35, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(220, 100, 60, ${alpha * 0.7})`
+  ctx.arc(e.x, e.y, r * 0.45, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(255, 70, 40, ${alpha * 0.85})`
   ctx.fill()
 }
 
 function drawCorruptor(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, s: number) {
   const r = e.radius * pulse
   const alpha = 0.4 + e.corruption * 0.4
+
+  // Pulsing dark aura — large, unmistakable
+  const auraPulse = 1 + Math.sin(time * 2 + e.phase) * 0.25
+  const auraR = r * 7 * auraPulse
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, auraR, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(20, 25, 15, ${alpha * 0.12})`
+  ctx.fill()
 
   // Sickly halo with distortion
   const haloR = r * 5
@@ -922,7 +939,7 @@ function drawEmber(ctx: CanvasRenderingContext2D, world: WorldState) {
 // ---- Karma Visual Consequences ----
 
 function drawKarmaOverlay(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
-  const { karma } = world
+  const { smoothKarma: karma } = world
 
   // High corruption: sickly green-gray vignette — MUCH more visible
   if (karma.corruption > 0.3) {
@@ -1026,8 +1043,9 @@ function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState, w
     ctx.beginPath()
     ctx.moveTo(line.x1, line.y1)
     ctx.lineTo(line.x2, line.y2)
-    ctx.strokeStyle = `hsla(${colors[line.kind]}, ${line.alpha})`
-    ctx.lineWidth = 1.5 * world.scale
+    const lineAlpha = line.kind === 'hunt' ? Math.min(1, line.alpha * 1.8 + 0.15) : line.alpha
+    ctx.strokeStyle = `hsla(${colors[line.kind]}, ${lineAlpha})`
+    ctx.lineWidth = (line.kind === 'hunt' ? 3.0 : line.kind === 'corrupt' ? 2.0 : 1.5) * world.scale
     ctx.stroke()
   }
 }
