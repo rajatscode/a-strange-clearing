@@ -290,6 +290,15 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
 
 // ---- Drawing ----
 
+// Frame budget estimate (~376 draw calls max per visible frame):
+// Background: 85 (1 fill + 4 bands + 80 grain dots)
+// Fog: 6 (4 rects + 2 radial gradient mist patches)
+// Stars/Scars: 10 | Particles (3 layers, ~20 visible): 42
+// Connection lines: 20 | Grass (~80 visible): 80
+// Entities (~15-20 visible, 3-5 calls each): 80
+// Nav nodes: 15 | Ripples/Flashes: 8 | Fragments: 2
+// Death particles/Blooms: 13 | Player (trail+blob): 15
+// Total: ~376 — well under 600 budget
 function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: number) {
   const isDead = !world.player.alive
   const cam = world.camera
@@ -985,15 +994,16 @@ function drawCorruptor(ctx: CanvasRenderingContext2D, e: Entity, col: { r: numbe
   ctx.fillStyle = `rgba(100, 130, 80, ${alpha * 0.5 + Math.sin(time * 6 + e.phase) * 0.15})`
   ctx.fill()
 
-  // Static distortion lines near high-corruption corruptors
+  // Static distortion lines near high-corruption corruptors (deterministic)
   if (e.corruption > 0.5) {
     ctx.globalAlpha = alpha * 0.15
     for (let j = 0; j < 3; j++) {
-      const lx = e.x + (Math.random() - 0.5) * r * 4
-      const ly = e.y + (Math.random() - 0.5) * r * 3
+      const seed = e.phase + j * 2.1
+      const lx = e.x + Math.sin(time * 1.3 + seed) * r * 2
+      const ly = e.y + Math.cos(time * 0.9 + seed * 1.7) * r * 1.5
       ctx.beginPath()
       ctx.moveTo(lx, ly)
-      ctx.lineTo(lx + (Math.random() - 0.5) * r * 2, ly + (Math.random() - 0.5) * r)
+      ctx.lineTo(lx + Math.sin(time * 2.7 + seed * 3) * r, ly + Math.cos(time * 1.8 + seed * 2.3) * r * 0.5)
       ctx.strokeStyle = `rgba(${col.r}, ${col.g}, ${col.b}, 0.4)`
       ctx.lineWidth = 1 * s
       ctx.stroke()
