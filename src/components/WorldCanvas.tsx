@@ -149,6 +149,23 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
         addRipple(world, cx, cy)
         addFlash(world, cx, cy, 255, 200, 100, 90)  // warm bloom
         break
+      case 'fragile_harvest':
+        // Cold blue ripple + pull lines drawn in drawEntities
+        addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 80, 120, 200, 70)  // cold blue extraction
+        addFlash(world, world.player.x, world.player.y, 200, 220, 255, 40)  // player brightens
+        break
+      case 'cooperator_drain':
+        // Cold purple + player energy flash
+        addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 140, 80, 200, 90)  // cold purple drain
+        addFlash(world, world.player.x, world.player.y, 220, 200, 255, 50)  // player power surge
+        break
+      case 'corruption_ripple':
+        // Dark corruption ripple — no beauty, just poison
+        addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 60, 50, 80, 100)  // dark purple-gray expanding
+        break
     }
   }, [])
 
@@ -721,6 +738,15 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'],
     ctx.beginPath()
     ctx.arc(x, y, kindR, 0, Math.PI * 2)
     ctx.fillStyle = `hsla(${hue - 10}, ${Math.min(90, sat + 10)}%, ${Math.min(85, lit - 5)}%, ${kindGlow * 0.06})`
+    ctx.fill()
+  }
+
+  // Extraction glow boost — player briefly brightens after harvesting/draining
+  if (player.glowBoost > 0.02) {
+    const boostR = aura * (3 + player.glowBoost * 5)
+    ctx.beginPath()
+    ctx.arc(x, y, boostR, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${hue + 20}, ${Math.min(95, sat + 15)}%, ${Math.min(95, lit + 10)}%, ${player.glowBoost * 0.12})`
     ctx.fill()
   }
 

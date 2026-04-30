@@ -442,7 +442,7 @@ export function findEntityAt(state: WorldState, x: number, y: number): number {
 }
 
 export type ClickResult = {
-  type: 'none' | 'fragile_nourish' | 'cooperator_exchange' | 'defector_risk' | 'corruptor_cleanse_success' | 'corruptor_cleanse_fail' | 'ember_revive' | 'ripple' | 'false_beacon_trap'
+  type: 'none' | 'fragile_nourish' | 'cooperator_exchange' | 'defector_risk' | 'corruptor_cleanse_success' | 'corruptor_cleanse_fail' | 'ember_revive' | 'ripple' | 'false_beacon_trap' | 'fragile_harvest' | 'cooperator_drain' | 'corruption_ripple'
   entityIndex?: number
 }
 
@@ -495,34 +495,84 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
   if (idx >= 0) {
     const e = state.entities[idx]
 
-    if (e.kind === 'fragile' && player.energy > 0.1) {
-      const transfer = Math.min(0.15, player.energy - 0.05)
-      player.energy -= transfer
-      e.energy = Math.min(1, e.energy + transfer * 1.5)
-      e.trust = Math.min(1, e.trust + 0.1)
-      e.radius = Math.min(e.radius * 1.8, 12 * state.scale)  // dramatic size burst
-      karma.beauty = Math.min(1, karma.beauty + 0.03)
-      karma.generosity = Math.min(1, karma.generosity + 0.03)
-      karma.trust = Math.min(1, karma.trust + 0.02)
-      karma.navigability = Math.min(1, karma.navigability + 0.1)  // kindness opens paths
-      addBeautyBloom(state, e.x, e.y, 150)
-      addFlash(state, e.x, e.y, 255, 220, 140, 80 * state.scale)  // warm saving glow
-      return { type: 'fragile_nourish', entityIndex: idx }
+    if (e.kind === 'fragile') {
+      if (player.aggression >= 0.4) {
+        // HARVEST — extractive path: fast energy, karmic cost
+        player.energy = Math.min(1, player.energy + 0.2)
+        player.glowBoost = Math.min(1, player.glowBoost + 0.3)
+        e.energy = Math.max(0, e.energy - 0.4)
+        e.radius = Math.max(2 * state.scale, e.radius * 0.6)  // visibly shrinks
+        e.trust = Math.max(0, e.trust - 0.3)
+        karma.beauty = Math.max(0, karma.beauty - 0.05)
+        karma.trust = Math.max(0, karma.trust - 0.03)
+        karma.hostility = Math.min(1, karma.hostility + 0.03)
+        karma.corruption = Math.min(1, karma.corruption + 0.02)
+        // Kill if drained
+        if (e.energy <= 0.05) {
+          e.alive = false
+          state.worldEvents.entityDeath = true
+          karma.corruption = Math.min(1, karma.corruption + 0.03)
+        }
+        addFlash(state, e.x, e.y, 80, 120, 200, 60 * state.scale)  // cold blue flash
+        return { type: 'fragile_harvest', entityIndex: idx }
+      } else if (player.energy > 0.1) {
+        // NOURISH — generous path
+        const transfer = Math.min(0.15, player.energy - 0.05)
+        player.energy -= transfer
+        e.energy = Math.min(1, e.energy + transfer * 1.5)
+        e.trust = Math.min(1, e.trust + 0.1)
+        e.radius = Math.min(e.radius * 1.8, 12 * state.scale)
+        karma.beauty = Math.min(1, karma.beauty + 0.03)
+        karma.generosity = Math.min(1, karma.generosity + 0.03)
+        karma.trust = Math.min(1, karma.trust + 0.02)
+        karma.navigability = Math.min(1, karma.navigability + 0.1)
+        addBeautyBloom(state, e.x, e.y, 150)
+        addFlash(state, e.x, e.y, 255, 220, 140, 80 * state.scale)
+        return { type: 'fragile_nourish', entityIndex: idx }
+      }
     }
 
     if (e.kind === 'cooperator') {
-      player.energy = Math.min(1, player.energy + 0.05)
-      e.energy = Math.min(1, e.energy + 0.05)
-      e.trust = Math.min(1, e.trust + 0.08)
-      e.beauty = Math.min(1, e.beauty + 0.05)
-      karma.beauty = Math.min(1, karma.beauty + 0.025)
-      karma.trust = Math.min(1, karma.trust + 0.02)
-      // Beauty bloom between player and entity
-      const mx = (player.x + e.x) / 2
-      const my = (player.y + e.y) / 2
-      addBeautyBloom(state, mx, my, 120)
-      addFlash(state, mx, my, 100, 240, 180, 60 * state.scale)
-      return { type: 'cooperator_exchange', entityIndex: idx }
+      if (player.aggression >= 0.4) {
+        // DRAIN — most extractive act: high reward, devastating karmic cost
+        player.energy = Math.min(1, player.energy + 0.3)
+        player.glowBoost = Math.min(1, player.glowBoost + 0.4)
+        e.energy = Math.max(0, e.energy - 0.3)
+        e.trust = Math.max(0, e.trust - 0.4)
+        e.radius = Math.max(3 * state.scale, e.radius * 0.7)
+        karma.beauty = Math.max(0, karma.beauty - 0.08)
+        karma.trust = Math.max(0, karma.trust - 0.06)
+        karma.hostility = Math.min(1, karma.hostility + 0.04)
+        karma.corruption = Math.min(1, karma.corruption + 0.04)
+        // Cooperator recoils — breaks constellations
+        const fdx = e.x - player.x
+        const fdy = e.y - player.y
+        const fdist = Math.sqrt(fdx * fdx + fdy * fdy)
+        if (fdist > 0) {
+          e.vx += (fdx / fdist) * 2.5
+          e.vy += (fdy / fdist) * 2.5
+        }
+        if (e.energy <= 0.05) {
+          e.alive = false
+          state.worldEvents.entityDeath = true
+          karma.corruption = Math.min(1, karma.corruption + 0.05)
+        }
+        addFlash(state, e.x, e.y, 140, 80, 200, 80 * state.scale)  // cold purple flash
+        return { type: 'cooperator_drain', entityIndex: idx }
+      } else {
+        // MUTUAL EXCHANGE — cooperative path
+        player.energy = Math.min(1, player.energy + 0.05)
+        e.energy = Math.min(1, e.energy + 0.05)
+        e.trust = Math.min(1, e.trust + 0.08)
+        e.beauty = Math.min(1, e.beauty + 0.05)
+        karma.beauty = Math.min(1, karma.beauty + 0.025)
+        karma.trust = Math.min(1, karma.trust + 0.02)
+        const mx = (player.x + e.x) / 2
+        const my = (player.y + e.y) / 2
+        addBeautyBloom(state, mx, my, 120)
+        addFlash(state, mx, my, 100, 240, 180, 60 * state.scale)
+        return { type: 'cooperator_exchange', entityIndex: idx }
+      }
     }
 
     if (e.kind === 'defector') {
@@ -587,21 +637,47 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
     }
   }
 
-  // Empty space click = "calling out" — attract nearby entities
-  const attractRadius = 200 * state.scale
-  for (let i = 0; i < state.entities.length; i++) {
-    const e = state.entities[i]
-    if (!e.alive) continue
-    const edx = x - e.x
-    const edy = y - e.y
-    const edist = Math.sqrt(edx * edx + edy * edy)
-    if (edist < attractRadius && edist > 10) {
-      const pull = (1 - edist / attractRadius) * 0.8
-      e.vx += (edx / edist) * pull
-      e.vy += (edy / edist) * pull
+  // Empty space click behavior depends on aggression
+  if (player.aggression >= 0.5) {
+    // CORRUPTION RIPPLE — spam clicking poisons the world
+    const poisonRadius = 180 * state.scale
+    for (let i = 0; i < state.entities.length; i++) {
+      const e = state.entities[i]
+      if (!e.alive) continue
+      const edx = x - e.x
+      const edy = y - e.y
+      const edist = Math.sqrt(edx * edx + edy * edy)
+      if (edist < poisonRadius) {
+        e.corruption = Math.min(1, e.corruption + 0.05)
+        e.trust = Math.max(0, e.trust - 0.02)
+        // Entities recoil from corruption
+        if (edist > 10) {
+          const push = (1 - edist / poisonRadius) * 0.5
+          e.vx -= (edx / edist) * push
+          e.vy -= (edy / edist) * push
+        }
+      }
     }
+    karma.corruption = Math.min(1, karma.corruption + 0.02)
+    karma.beauty = Math.max(0, karma.beauty - 0.01)
+    return { type: 'corruption_ripple' }
+  } else {
+    // Normal "calling out" — attract nearby entities
+    const attractRadius = 200 * state.scale
+    for (let i = 0; i < state.entities.length; i++) {
+      const e = state.entities[i]
+      if (!e.alive) continue
+      const edx = x - e.x
+      const edy = y - e.y
+      const edist = Math.sqrt(edx * edx + edy * edy)
+      if (edist < attractRadius && edist > 10) {
+        const pull = (1 - edist / attractRadius) * 0.8
+        e.vx += (edx / edist) * pull
+        e.vy += (edy / edist) * pull
+      }
+    }
+    return { type: 'ripple' }
   }
-  return { type: 'ripple' }
 }
 
 export function updateWorld(state: WorldState, dt: number, viewportWidth: number, viewportHeight: number): void {
@@ -698,6 +774,9 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
     player.stillness = Math.max(0, player.stillness - dt * 0.05)
     player.aggression = Math.max(0, player.aggression - dt * 0.05)
   }
+
+  // Extraction glow decays quickly
+  player.glowBoost = Math.max(0, player.glowBoost - dt * 0.8)
 
   karma.beauty += (player.patience - 0.5) * dt * 0.054
   karma.trust += (player.stillness - player.aggression) * dt * 0.036
