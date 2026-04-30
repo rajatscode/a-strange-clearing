@@ -450,7 +450,11 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
   const { player, karma } = state
   const now = state.time
 
-  if (now - state.lastClickTime < state.clickCooldown) {
+  // Rapid click detection: < 0.5s = extractive, >= 0.5s = cooperative
+  const timeSinceLastClick = now - state.lastClickTime
+  const isRapidClick = timeSinceLastClick < 0.5 && timeSinceLastClick > 0.05 // > 0.05 to filter cooldown bounces
+
+  if (timeSinceLastClick < state.clickCooldown) {
     player.aggression = Math.min(1, player.aggression + 0.05)
     karma.hostility = Math.min(1, karma.hostility + 0.01)
     return { type: 'none' }
@@ -501,7 +505,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
     }
 
     if (e.kind === 'fragile') {
-      if (player.aggression >= 0.4) {
+      if (isRapidClick) {
         // HARVEST — extractive path: fast energy, karmic cost
         player.energy = Math.min(3.0, player.energy + 0.2)
         player.glowBoost = Math.min(1, player.glowBoost + 0.3)
@@ -539,7 +543,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
     }
 
     if (e.kind === 'cooperator') {
-      if (player.aggression >= 0.4) {
+      if (isRapidClick) {
         // DRAIN — most extractive act: high reward, devastating karmic cost
         player.energy = Math.min(3.0, player.energy + 0.3)
         player.glowBoost = Math.min(1, player.glowBoost + 0.4)
@@ -600,11 +604,23 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
     }
 
     if (e.kind === 'corruptor') {
+      if (isRapidClick) {
+        // HARVEST CORRUPTION — exploit it for energy, selfish path
+        player.energy = Math.min(3.0, player.energy + 0.15)
+        player.glowBoost = Math.min(1, player.glowBoost + 0.25)
+        karma.corruption = Math.min(1, karma.corruption + 0.08)
+        karma.beauty = Math.max(0, karma.beauty - 0.03)
+        karma.hostility = Math.min(1, karma.hostility + 0.02)
+        addFlash(state, e.x, e.y, 100, 80, 50, 70 * state.scale)  // sickly dark flash
+        return { type: 'fragile_harvest', entityIndex: idx }  // reuse harvest type for visual
+      }
+
+      // CLEANSE — cooperative path, risky and generous
       const cost = 0.15
       if (player.energy < cost) return { type: 'none' }
       player.energy -= cost
 
-      const energyBonus = Math.max(0, player.energy - 1) * 0.15  // high energy improves cleanse
+      const energyBonus = Math.max(0, player.energy - 1) * 0.15
       const successChance = 0.3 + player.patience * 0.3 + karma.beauty * 0.2 + karma.trust * 0.2 + energyBonus
       if (Math.random() < successChance) {
         e.corruption = Math.max(0, e.corruption - 0.4)
@@ -644,8 +660,8 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
     }
   }
 
-  // Empty space click behavior depends on aggression
-  if (player.aggression >= 0.5) {
+  // Empty space click behavior depends on click speed
+  if (isRapidClick) {
     // CORRUPTION RIPPLE — spam clicking poisons the world
     const poisonRadius = 180 * state.scale
     for (let i = 0; i < state.entities.length; i++) {
@@ -801,13 +817,13 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
 
   karma.hostility = Math.max(0, karma.hostility - dt * 0.012 * player.patience)
 
-  if (player.stillness > 0.6) {
-    player.energy = Math.min(1, player.energy + dt * 0.003) // stillness regen caps at 1.0
+  if (player.stillness > 0.6 && player.energy < 0.8) {
+    player.energy = Math.min(0.8, player.energy + dt * 0.003) // stillness regen caps at 0.8
   }
 
-  // High energy maintenance cost — bigger = faster drain
-  if (player.energy > 1.0) {
-    player.energy -= dt * 0.01 * player.energy
+  // High energy maintenance cost — only above 1.5 buffer zone, gentle drain
+  if (player.energy > 1.5) {
+    player.energy -= dt * 0.005 * (player.energy - 1.5)
   }
 
   // Extra energy drain in corruption zones

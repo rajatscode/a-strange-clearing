@@ -45,6 +45,10 @@ export function loadKarma(): KarmaState {
         karma.beauty = Math.min(1, karma.beauty + recovery * 0.3)
         karma.trust = Math.min(1, karma.trust + recovery * 0.2)
       }
+      // Always revive on page refresh — world remembers karma but player comes back alive
+      if (karma.playerEnergy <= 0) {
+        karma.playerEnergy = 0.5
+      }
       karma.totalVisits++
       karma.lastVisit = Date.now()
       return karma
