@@ -1,15 +1,24 @@
 import { useRef, useEffect, useCallback } from 'react'
-import type { WorldState } from '../lib/simulation'
-import { createWorld, updateWorld, addRipple } from '../lib/simulation'
+import type { WorldState, Entity } from '../lib/simulation'
+import { createWorld, updateWorld, addRipple, findNavNodeAt, handleWorldClick, ENTITY_COLORS } from '../lib/simulation'
+import { AudioEngine } from './AudioEngine'
 
-export default function WorldCanvas() {
+export default function WorldCanvas({ onNavigate }: { onNavigate?: (route: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const worldRef = useRef<WorldState | null>(null)
   const lastMouseRef = useRef({ x: 0, y: 0, time: 0 })
+  const audioRef = useRef<AudioEngine | null>(null)
+  const clickedThisFrame = useRef(false)
+  const muteHover = useRef(false)
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     const world = worldRef.current
     if (!world) return
+
+    // Start audio on first interaction
+    if (audioRef.current && !audioRef.current.isMuted()) {
+      audioRef.current.start()
+    }
 
     const now = performance.now()
     const dx = e.clientX - lastMouseRef.current.x
@@ -26,14 +35,76 @@ export default function WorldCanvas() {
     const dpr = window.devicePixelRatio || 1
     world.player.targetX = e.clientX * dpr
     world.player.targetY = e.clientY * dpr
+
+    // Check mute button hover
+    const canvas = canvasRef.current
+    if (canvas) {
+      const bx = canvas.width / dpr - 36
+      const by = canvas.height / dpr - 36
+      const md = Math.sqrt((e.clientX - bx) ** 2 + (e.clientY - by) ** 2)
+      muteHover.current = md < 20
+    }
   }, [])
 
   const handleClick = useCallback((e: MouseEvent) => {
     const world = worldRef.current
     if (!world) return
+
+    // Start audio on first click
+    if (audioRef.current) {
+      audioRef.current.start()
+    }
+
     const dpr = window.devicePixelRatio || 1
-    addRipple(world, e.clientX * dpr, e.clientY * dpr)
-  }, [])
+
+    // Check mute button click
+    const canvas = canvasRef.current
+    if (canvas) {
+      const bx = canvas.width / dpr - 36
+      const by = canvas.height / dpr - 36
+      const md = Math.sqrt((e.clientX - bx) ** 2 + (e.clientY - by) ** 2)
+      if (md < 20) {
+        audioRef.current?.toggle()
+        return
+      }
+    }
+
+    const cx = e.clientX * dpr
+    const cy = e.clientY * dpr
+
+    // Check nav node click
+    const navNode = findNavNodeAt(world, cx, cy)
+    if (navNode && onNavigate) {
+      onNavigate(navNode.route)
+      return
+    }
+
+    // Entity interaction click
+    const result = handleWorldClick(world, cx, cy)
+    clickedThisFrame.current = true
+
+    switch (result.type) {
+      case 'ripple':
+        addRipple(world, cx, cy)
+        break
+      case 'fragile_nourish':
+      case 'cooperator_exchange':
+        addRipple(world, cx, cy)
+        break
+      case 'corruptor_cleanse_success':
+        addRipple(world, cx, cy)
+        addRipple(world, cx, cy)
+        break
+      case 'corruptor_cleanse_fail':
+      case 'defector_risk':
+        addRipple(world, cx, cy)
+        break
+      case 'ember_revive':
+        addRipple(world, cx, cy)
+        addRipple(world, cx, cy)
+        break
+    }
+  }, [onNavigate])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -43,6 +114,11 @@ export default function WorldCanvas() {
     if (!ctx) return
 
     let alive = true
+
+    // Initialize audio engine
+    if (!audioRef.current) {
+      audioRef.current = new AudioEngine()
+    }
 
     function resize() {
       const dpr = window.devicePixelRatio || 1
@@ -70,7 +146,27 @@ export default function WorldCanvas() {
       const world = worldRef.current
       if (world) {
         updateWorld(world, dt, canvas!.width, canvas!.height)
+
+        // Update audio engine
+        if (audioRef.current) {
+          audioRef.current.update({
+            mood: world.mood,
+            beauty: world.karma.beauty,
+            trust: world.karma.trust,
+            hostility: world.karma.hostility,
+            corruption: world.karma.corruption,
+            playerEnergy: world.player.energy,
+            playerAlive: world.player.alive,
+            mouseSpeed: world.mouseSmoothed,
+            isHovering: false,
+            clickEvent: clickedThisFrame.current,
+            cleansing: false,
+          })
+          clickedThisFrame.current = false
+        }
+
         draw(ctx!, world, canvas!.width, canvas!.height)
+        drawMuteGlyph(ctx!, canvas!.width, canvas!.height, audioRef.current?.isMuted() ?? false, muteHover.current)
       }
 
       requestAnimationFrame(render)
@@ -83,6 +179,10 @@ export default function WorldCanvas() {
       window.removeEventListener('resize', resize)
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('click', handleClick)
+      if (audioRef.current) {
+        audioRef.current.dispose()
+        audioRef.current = null
+      }
     }
   }, [handleMouseMove, handleClick])
 
@@ -98,15 +198,29 @@ export default function WorldCanvas() {
 // ---- Drawing ----
 
 function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: number) {
+  const isDead = !world.player.alive
+
   drawBackground(ctx, w, h, world)
   drawFog(ctx, w, h, world)
   drawParticlesForLayer(ctx, world, 0)
   drawParticlesForLayer(ctx, world, 1)
   drawGrass(ctx, world, h)
+  drawEntities(ctx, world)
   drawParticlesForLayer(ctx, world, 2)
+  drawNavNodes(ctx, world)
   drawRipples(ctx, world, world.scale)
-  drawPlayerTrail(ctx, world.player, world.scale)
-  drawPlayer(ctx, world.player, world.time, world.scale)
+
+  if (isDead) {
+    // Desaturation overlay when dead
+    ctx.fillStyle = 'rgba(10, 12, 15, 0.35)'
+    ctx.fillRect(0, 0, w, h)
+    drawEmber(ctx, world)
+  } else {
+    drawPlayerTrail(ctx, world.player, world.scale)
+    drawPlayer(ctx, world.player, world.time, world.scale)
+  }
+
+  drawKarmaOverlay(ctx, w, h, world)
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
@@ -114,14 +228,22 @@ function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, wor
   const bShift = karma.beauty * 12
   const cShift = karma.corruption * -8
 
-  const grad = ctx.createLinearGradient(0, 0, 0, h)
-  grad.addColorStop(0, `hsl(${225 + bShift + cShift}, ${25 + mood.saturation * 15}%, ${4 + mood.brightness * 4}%)`)
-  grad.addColorStop(0.35, `hsl(${215 + bShift}, ${20 + mood.saturation * 10}%, ${5 + mood.brightness * 3}%)`)
-  grad.addColorStop(0.6, `hsl(${175 + bShift + cShift}, ${22 + mood.saturation * 12}%, ${5 + mood.brightness * 3}%)`)
-  grad.addColorStop(0.85, `hsl(${150 + bShift}, ${28 + mood.saturation * 10}%, ${4 + mood.brightness * 3}%)`)
-  grad.addColorStop(1, `hsl(${135 + bShift}, ${30 + mood.saturation * 8}%, ${3 + mood.brightness * 2}%)`)
-  ctx.fillStyle = grad
+  // Layered horizontal bands instead of a linear gradient
+  const bands = [
+    { y: 0,        frac: 0.35, hue: 225 + bShift + cShift, sat: 25 + mood.saturation * 15, lit: 4 + mood.brightness * 4 },
+    { y: h * 0.35, frac: 0.25, hue: 215 + bShift,          sat: 20 + mood.saturation * 10, lit: 5 + mood.brightness * 3 },
+    { y: h * 0.6,  frac: 0.25, hue: 175 + bShift + cShift, sat: 22 + mood.saturation * 12, lit: 5 + mood.brightness * 3 },
+    { y: h * 0.85, frac: 0.15, hue: 150 + bShift,          sat: 28 + mood.saturation * 10, lit: 4 + mood.brightness * 3 },
+  ]
+  // Fill bottom color first as base
+  ctx.fillStyle = `hsl(${135 + bShift}, ${30 + mood.saturation * 8}%, ${3 + mood.brightness * 2}%)`
   ctx.fillRect(0, 0, w, h)
+  // Overlay bands top-down
+  for (let i = 0; i < bands.length; i++) {
+    const b = bands[i]
+    ctx.fillStyle = `hsl(${b.hue}, ${b.sat}%, ${b.lit}%)`
+    ctx.fillRect(0, b.y, w, h * b.frac + 2)
+  }
 
   // Subtle grain/noise — reduced from 200 to 80, using for loop
   for (let i = 0; i < 80; i++) {
@@ -136,39 +258,28 @@ function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: Wor
   const { mood, time } = world
   const fogAlpha = 0.04 + mood.fogAmount * 0.06
 
-  // Primary horizon fog
-  const horizonY = h * 0.58
-  const fogGrad = ctx.createRadialGradient(
-    w / 2 + Math.sin(time * 0.08) * w * 0.08, horizonY, 0,
-    w / 2, horizonY, w * 0.8
-  )
-  fogGrad.addColorStop(0, `hsla(175, 25%, 25%, ${fogAlpha * 2.5})`)
-  fogGrad.addColorStop(0.3, `hsla(190, 20%, 18%, ${fogAlpha * 1.5})`)
-  fogGrad.addColorStop(0.7, `hsla(200, 15%, 12%, ${fogAlpha * 0.5})`)
-  fogGrad.addColorStop(1, 'transparent')
-  ctx.fillStyle = fogGrad
-  ctx.fillRect(0, 0, w, h)
+  // Horizon fog — simple semi-transparent rect at horizon band
+  const horizonY = h * 0.45
+  const horizonH = h * 0.3
+  ctx.fillStyle = `hsla(175, 25%, 25%, ${fogAlpha * 1.8})`
+  ctx.fillRect(0, horizonY, w, horizonH)
+  ctx.fillStyle = `hsla(190, 20%, 18%, ${fogAlpha * 0.8})`
+  ctx.fillRect(0, horizonY - h * 0.1, w, horizonH + h * 0.2)
 
-  // Ground glow
-  const groundGlow = ctx.createLinearGradient(0, h * 0.7, 0, h)
-  groundGlow.addColorStop(0, 'transparent')
-  groundGlow.addColorStop(0.5, `hsla(160, 30%, 10%, ${fogAlpha * 1.5})`)
-  groundGlow.addColorStop(1, `hsla(150, 25%, 8%, ${fogAlpha * 2})`)
-  ctx.fillStyle = groundGlow
-  ctx.fillRect(0, 0, w, h)
+  // Ground glow — simple rect fills
+  ctx.fillStyle = `hsla(160, 30%, 10%, ${fogAlpha * 1.2})`
+  ctx.fillRect(0, h * 0.8, w, h * 0.2)
+  ctx.fillStyle = `hsla(150, 25%, 8%, ${fogAlpha * 1.5})`
+  ctx.fillRect(0, h * 0.9, w, h * 0.1)
 
-  // Drifting mist patches — reduced from 5 to 3
-  for (let i = 0; i < 3; i++) {
-    const mx = w * (0.15 + i * 0.3) + Math.sin(time * 0.04 + i * 1.7) * w * 0.12
-    const my = h * (0.35 + i * 0.1) + Math.cos(time * 0.025 + i * 2.3) * h * 0.05
-    const mr = w * 0.2 + Math.sin(time * 0.03 + i) * w * 0.04
-
-    const mist = ctx.createRadialGradient(mx, my, 0, mx, my, mr)
-    mist.addColorStop(0, `hsla(${165 + i * 15}, 20%, 22%, ${fogAlpha * 1.2})`)
-    mist.addColorStop(0.6, `hsla(${175 + i * 12}, 15%, 15%, ${fogAlpha * 0.4})`)
-    mist.addColorStop(1, 'transparent')
-    ctx.fillStyle = mist
-    ctx.fillRect(0, 0, w, h)
+  // Drifting mist patches — simple alpha rects, 2 patches
+  for (let i = 0; i < 2; i++) {
+    const mx = w * (0.1 + i * 0.4) + Math.sin(time * 0.04 + i * 1.7) * w * 0.12
+    const my = h * (0.3 + i * 0.15) + Math.cos(time * 0.025 + i * 2.3) * h * 0.05
+    const mw = w * 0.4
+    const mh = h * 0.15
+    ctx.fillStyle = `hsla(${165 + i * 15}, 20%, 22%, ${fogAlpha * 0.7})`
+    ctx.fillRect(mx - mw / 2, my - mh / 2, mw, mh)
   }
 }
 
@@ -185,18 +296,16 @@ function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState,
 
     if (alpha < 0.05) continue
 
-    // Glow halo — simplified to 3 stops (was 4)
-    const haloR = r * 6
-    const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, haloR)
-    glow.addColorStop(0, `hsla(${p.hue}, 70%, 75%, ${alpha * 0.45})`)
-    glow.addColorStop(0.3, `hsla(${p.hue}, 55%, 50%, ${alpha * 0.12})`)
-    glow.addColorStop(1, 'transparent')
-    ctx.fillStyle = glow
-    ctx.fillRect(p.x - haloR, p.y - haloR, haloR * 2, haloR * 2)
-
-    // Bright core
+    // Glow halo — simple alpha circle (no gradient)
+    const haloR = r * 5
     ctx.beginPath()
-    ctx.arc(p.x, p.y, r * 0.8, 0, Math.PI * 2)
+    ctx.arc(p.x, p.y, haloR, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${p.hue}, 60%, 55%, ${alpha * 0.06})`
+    ctx.fill()
+
+    // Core
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
     ctx.fillStyle = `hsla(${p.hue}, 70%, 85%, ${alpha * 0.9})`
     ctx.fill()
   }
@@ -234,16 +343,11 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, h: number) 
       ctx.fillStyle = `hsla(${blade.hue}, 75%, 60%, ${0.08 + glowPulse * 0.12})`
       ctx.fill()
 
-      // Luminous blade stroke — gradient only for luminous blades (~15% of total)
+      // Luminous blade stroke — solid color with luminous hue (no gradient)
       ctx.beginPath()
       ctx.moveTo(blade.x, baseY)
       ctx.quadraticCurveTo(cpX, cpY, tipX, tipY)
-      const grad = ctx.createLinearGradient(blade.x, baseY, tipX, tipY)
-      grad.addColorStop(0, `hsl(${baseHue}, ${baseSat * 0.6}%, ${baseLit * 0.4}%)`)
-      grad.addColorStop(0.5, `hsl(${baseHue + 10}, ${baseSat}%, ${baseLit * 0.7}%)`)
-      grad.addColorStop(0.75, `hsl(${blade.hue}, 60%, ${20 + glowPulse * 15}%)`)
-      grad.addColorStop(1, `hsl(${blade.hue}, 80%, ${30 + glowPulse * 30}%)`)
-      ctx.strokeStyle = grad
+      ctx.strokeStyle = `hsl(${blade.hue}, 70%, ${22 + glowPulse * 20}%)`
     } else {
       // Non-luminous blade — solid color instead of per-blade gradient
       // Height-based lightness variation preserves the depth illusion
@@ -282,15 +386,11 @@ function drawRipples(ctx: CanvasRenderingContext2D, world: WorldState, scale: nu
     ctx.lineWidth = 1.5 * scale
     ctx.stroke()
 
-    // Glow fill — only when clearly visible
+    // Glow fill — simple alpha circle
     if (r.alpha > 0.08) {
-      const glow = ctx.createRadialGradient(r.x, r.y, 0, r.x, r.y, r.radius)
-      glow.addColorStop(0, `hsla(${hue}, 60%, 60%, ${r.alpha * 0.12})`)
-      glow.addColorStop(0.5, `hsla(${hue}, 50%, 45%, ${r.alpha * 0.05})`)
-      glow.addColorStop(1, 'transparent')
-      ctx.fillStyle = glow
       ctx.beginPath()
       ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2)
+      ctx.fillStyle = `hsla(${hue}, 55%, 50%, ${r.alpha * 0.07})`
       ctx.fill()
     }
   }
@@ -318,30 +418,24 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'],
   const { x, y, aura, energy } = player
   const pulse = Math.sin(time * 2.5) * 0.12 + 1
   const breathe = Math.sin(time * 1.2) * 0.08 + 1
+  // Fade player as energy drops toward death
+  const energyAlpha = 0.3 + energy * 0.7
 
-  // Outer aura — wide, soft presence
+  // Outer aura — simple alpha circle
   const outerR = aura * pulse * 3.5
-  const outerGlow = ctx.createRadialGradient(x, y, 0, x, y, outerR)
-  outerGlow.addColorStop(0, `hsla(185, 75%, 70%, ${0.1 * energy})`)
-  outerGlow.addColorStop(0.3, `hsla(185, 60%, 55%, ${0.04 * energy})`)
-  outerGlow.addColorStop(1, 'transparent')
-  ctx.fillStyle = outerGlow
   ctx.beginPath()
   ctx.arc(x, y, outerR, 0, Math.PI * 2)
+  ctx.fillStyle = `hsla(185, 75%, 70%, ${0.06 * energy * energyAlpha})`
   ctx.fill()
 
-  // Mid aura — tighter glow ring
+  // Mid aura — simple alpha circle
   const midR = aura * breathe * 1.8
-  const midGlow = ctx.createRadialGradient(x, y, 0, x, y, midR)
-  midGlow.addColorStop(0, `hsla(180, 85%, 75%, ${0.3 * energy})`)
-  midGlow.addColorStop(0.4, `hsla(180, 70%, 55%, ${0.12 * energy})`)
-  midGlow.addColorStop(1, 'transparent')
-  ctx.fillStyle = midGlow
   ctx.beginPath()
   ctx.arc(x, y, midR, 0, Math.PI * 2)
+  ctx.fillStyle = `hsla(180, 85%, 75%, ${0.15 * energy * energyAlpha})`
   ctx.fill()
 
-  // Core blob — organic wobble (20 steps, was 32)
+  // Core blob — organic wobble (20 steps)
   const coreR = (8 + energy * 5) * scale
   ctx.beginPath()
   const steps = 20
@@ -357,17 +451,351 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'],
     else ctx.lineTo(px, py)
   }
   ctx.closePath()
-  ctx.fillStyle = `hsla(180, 85%, 82%, ${0.65 + energy * 0.35})`
+  ctx.fillStyle = `hsla(180, 85%, 82%, ${(0.65 + energy * 0.35) * energyAlpha})`
   ctx.fill()
 
-  // Inner bright center
+  // Inner bright center — simple alpha circle
   const innerR = coreR * 0.5
-  const innerGlow = ctx.createRadialGradient(x, y, 0, x, y, innerR)
-  innerGlow.addColorStop(0, `hsla(175, 95%, 95%, ${0.9 * energy})`)
-  innerGlow.addColorStop(0.5, `hsla(180, 90%, 85%, ${0.5 * energy})`)
-  innerGlow.addColorStop(1, 'transparent')
-  ctx.fillStyle = innerGlow
   ctx.beginPath()
   ctx.arc(x, y, innerR, 0, Math.PI * 2)
+  ctx.fillStyle = `hsla(175, 95%, 95%, ${0.8 * energy * energyAlpha})`
   ctx.fill()
+}
+
+// ---- Nav Nodes ----
+
+function drawNavNodes(ctx: CanvasRenderingContext2D, world: WorldState) {
+  const { navNodes, time, scale: s } = world
+  for (let i = 0; i < navNodes.length; i++) {
+    const n = navNodes[i]
+    if (n.revealed < 0.05) continue
+    const a = n.revealed < 0.3 ? n.revealed / 0.3 * 0.15 : n.revealed < 0.7 ? 0.15 + (n.revealed - 0.3) / 0.4 * 0.35 : 0.5 + (n.revealed - 0.7) / 0.3 * 0.5
+    const p = n.revealed >= 0.95 ? 1 + Math.sin(time * 2.5 + n.phase) * 0.15 : 1
+    if (n.kind === 'note') { _drawNote(ctx, n.x, n.y, n.revealed, a, p, time, n.phase, s) }
+    else if (n.kind === 'artifact') { _drawArtifact(ctx, n.x, n.y, n.revealed, a, p, time, n.phase, s) }
+    else { _drawBio(ctx, n.x, n.y, n.revealed, a, p, s) }
+  }
+}
+function _drawNote(ctx: CanvasRenderingContext2D, x: number, y: number, rev: number, al: number, pu: number, t: number, ph: number, s: number) {
+  const fl = 0.7 + Math.sin(t * 4 + ph) * 0.15 + Math.sin(t * 7 + ph * 2) * 0.1
+  const r = (4 + rev * 4) * s * pu, hu = 35 + Math.sin(t * 0.5 + ph) * 15
+  ctx.beginPath(); ctx.arc(x, y, r * 5, 0, Math.PI * 2)
+  ctx.fillStyle = `hsla(${hu},70%,65%,${al * 0.12 * fl})`; ctx.fill()
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.fillStyle = `hsla(${hu},75%,75%,${al * 0.8 * fl})`; ctx.fill()
+  if (rev > 0.3) {
+    const fa = (rev - 0.3) / 0.7 * al * 0.4 * fl
+    ctx.save(); ctx.translate(x, y); ctx.rotate(Math.sin(t * 0.3 + ph) * 0.1)
+    ctx.fillStyle = `hsla(${hu},50%,80%,${fa})`; ctx.fillRect(-3*s,-5*s,6*s,10*s)
+    ctx.fillStyle = `hsla(${hu},40%,60%,${fa*0.6})`
+    ctx.fillRect(-2*s,-3*s,4*s,0.8*s); ctx.fillRect(-2*s,-1*s,3*s,0.8*s); ctx.fillRect(-2*s,1*s,3.5*s,0.8*s)
+    ctx.restore()
+  }
+}
+function _drawArtifact(ctx: CanvasRenderingContext2D, x: number, y: number, rev: number, al: number, pu: number, t: number, ph: number, s: number) {
+  const r = (6 + rev * 5) * s * pu, hu = 220 + Math.sin(t * 0.3 + ph) * 20
+  ctx.beginPath(); ctx.arc(x, y, r * 4, 0, Math.PI * 2)
+  ctx.fillStyle = `hsla(${hu},60%,55%,${al * 0.1})`; ctx.fill()
+  ctx.beginPath()
+  for (let j = 0; j <= 6; j++) { const a = (j/6)*Math.PI*2-Math.PI/2; const px=x+Math.cos(a)*r; const py=y+Math.sin(a)*r; j===0?ctx.moveTo(px,py):ctx.lineTo(px,py) }
+  ctx.closePath(); ctx.strokeStyle = `hsla(${hu},65%,65%,${al*0.7})`; ctx.lineWidth = 1.5*s; ctx.stroke()
+  ctx.fillStyle = `hsla(${hu},55%,50%,${al*0.2})`; ctx.fill()
+  if (rev > 0.3) {
+    const ir = r * 0.5; ctx.beginPath()
+    for (let j = 0; j <= 6; j++) { const a=(j/6)*Math.PI*2; const px=x+Math.cos(a)*ir; const py=y+Math.sin(a)*ir; j===0?ctx.moveTo(px,py):ctx.lineTo(px,py) }
+    ctx.closePath(); ctx.strokeStyle = `hsla(${hu},55%,60%,${(rev-0.3)/0.7*al*0.4})`; ctx.lineWidth = s; ctx.stroke()
+  }
+}
+function _drawBio(ctx: CanvasRenderingContext2D, x: number, y: number, rev: number, al: number, pu: number, s: number) {
+  const hu = 30, r = (5 + rev * 4) * s * pu
+  ctx.beginPath(); ctx.arc(x, y, r * 5, 0, Math.PI * 2)
+  ctx.fillStyle = `hsla(${hu},50%,50%,${al*0.08})`; ctx.fill()
+  const sa = al * 0.7
+  ctx.beginPath(); ctx.ellipse(x, y+2*s, r*1.1, r*0.5, 0, 0, Math.PI*2); ctx.fillStyle = `hsla(${hu},30%,45%,${sa})`; ctx.fill()
+  ctx.beginPath(); ctx.ellipse(x, y-1*s, r*0.8, r*0.4, 0, 0, Math.PI*2); ctx.fillStyle = `hsla(${hu},35%,50%,${sa})`; ctx.fill()
+  ctx.beginPath(); ctx.ellipse(x, y-4*s, r*0.5, r*0.3, 0, 0, Math.PI*2); ctx.fillStyle = `hsla(${hu},40%,55%,${sa})`; ctx.fill()
+  if (rev > 0.5) {
+    const ta = (rev-0.5)/0.5*al*0.5
+    ctx.beginPath(); ctx.arc(x, y-6*s, r*0.3, 0, Math.PI*2); ctx.fillStyle = `hsla(${hu},70%,70%,${ta})`; ctx.fill()
+  }
+}
+
+// ---- Entity Drawing ----
+
+function drawEntities(ctx: CanvasRenderingContext2D, world: WorldState) {
+  const { entities, time, scale, karma } = world
+  const trustBoost = karma.trust * 0.3
+
+  for (let i = 0; i < entities.length; i++) {
+    const e = entities[i]
+    if (!e.alive) continue
+
+    const col = ENTITY_COLORS[e.kind]
+    const pulse = Math.sin(time * 2 + e.phase) * 0.15 + 1
+
+    if (e.kind === 'wanderer') {
+      drawWanderer(ctx, e, col, pulse, scale, trustBoost)
+    } else if (e.kind === 'fragile') {
+      drawFragile(ctx, e, col, pulse, time, scale)
+    } else if (e.kind === 'cooperator') {
+      drawCooperator(ctx, e, col, pulse, scale, trustBoost)
+    } else if (e.kind === 'defector') {
+      drawDefector(ctx, e, col, pulse, time, scale)
+    } else if (e.kind === 'corruptor') {
+      drawCorruptor(ctx, e, col, pulse, time, scale)
+    }
+  }
+}
+
+function drawWanderer(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, _s: number, trustBoost: number) {
+  const r = e.radius * pulse
+  const alpha = 0.4 + e.energy * 0.3 + trustBoost * 0.1
+
+  // Soft glow halo
+  const haloR = r * 4
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.08})`
+  ctx.fill()
+
+  // Core
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, r, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.6})`
+  ctx.fill()
+
+  // Bright center
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, r * 0.4, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${Math.min(255, col.r + 60)}, ${Math.min(255, col.g + 60)}, ${Math.min(255, col.b + 40)}, ${alpha * 0.8})`
+  ctx.fill()
+}
+
+function drawFragile(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, _s: number) {
+  const r = e.radius * (0.7 + e.energy * 0.3) * pulse
+  // Flickering — dim and unsteady
+  const flicker = 0.5 + Math.sin(time * 5 + e.phase) * 0.2 + Math.sin(time * 8.3 + e.phase * 2) * 0.15
+  const alpha = (0.2 + e.energy * 0.4) * flicker
+
+  // Dim warm glow
+  const haloR = r * 3
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.06})`
+  ctx.fill()
+
+  // Small flickering core
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, r, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.5})`
+  ctx.fill()
+}
+
+function drawCooperator(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, _s: number, trustBoost: number) {
+  const r = e.radius * pulse * (1 + trustBoost * 0.2)
+  const alpha = 0.5 + e.energy * 0.3 + e.beauty * 0.2
+
+  // Warm glow halo — larger and brighter
+  const haloR = r * 5
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.1})`
+  ctx.fill()
+
+  // Core
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, r, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.65})`
+  ctx.fill()
+
+  // Inner glow
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, r * 0.5, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${Math.min(255, col.r + 80)}, ${Math.min(255, col.g + 40)}, ${Math.min(255, col.b + 60)}, ${alpha * 0.85})`
+  ctx.fill()
+}
+
+function drawDefector(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, _s: number) {
+  const r = e.radius * pulse
+  const alpha = 0.4 + e.hostility * 0.3
+
+  // Angular halo
+  const haloR = r * 3.5
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.06})`
+  ctx.fill()
+
+  // Angular core — hexagonal
+  ctx.beginPath()
+  const sides = 6
+  for (let j = 0; j <= sides; j++) {
+    const a = (j / sides) * Math.PI * 2
+    const wobble = 1 + Math.sin(a * 2 + time * 3) * 0.15
+    const px = e.x + Math.cos(a) * r * wobble
+    const py = e.y + Math.sin(a) * r * wobble
+    if (j === 0) ctx.moveTo(px, py)
+    else ctx.lineTo(px, py)
+  }
+  ctx.closePath()
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.55})`
+  ctx.fill()
+
+  // Red-amber center
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, r * 0.35, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(220, 100, 60, ${alpha * 0.7})`
+  ctx.fill()
+}
+
+function drawCorruptor(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, s: number) {
+  const r = e.radius * pulse
+  const alpha = 0.4 + e.corruption * 0.4
+
+  // Sickly halo with distortion
+  const haloR = r * 5
+  const distort = Math.sin(time * 4 + e.phase) * 0.2
+  ctx.beginPath()
+  ctx.arc(e.x + distort * r, e.y, haloR, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.1})`
+  ctx.fill()
+
+  // Dark thorny core — irregular spikes
+  ctx.beginPath()
+  const spikes = 8
+  for (let j = 0; j <= spikes; j++) {
+    const a = (j / spikes) * Math.PI * 2
+    const spike = 1 + Math.sin(a * 3 + time * 2.5 + e.phase) * 0.3
+    const px = e.x + Math.cos(a) * r * spike
+    const py = e.y + Math.sin(a) * r * spike
+    if (j === 0) ctx.moveTo(px, py)
+    else ctx.lineTo(px, py)
+  }
+  ctx.closePath()
+  ctx.fillStyle = `rgba(60, 70, 50, ${alpha * 0.7})`
+  ctx.fill()
+
+  // Sickly inner glow
+  ctx.beginPath()
+  ctx.arc(e.x, e.y, r * 0.5, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(100, 130, 80, ${alpha * 0.5 + Math.sin(time * 6 + e.phase) * 0.15})`
+  ctx.fill()
+
+  // Static distortion lines near high-corruption corruptors
+  if (e.corruption > 0.5) {
+    ctx.globalAlpha = alpha * 0.15
+    for (let j = 0; j < 3; j++) {
+      const lx = e.x + (Math.random() - 0.5) * r * 4
+      const ly = e.y + (Math.random() - 0.5) * r * 3
+      ctx.beginPath()
+      ctx.moveTo(lx, ly)
+      ctx.lineTo(lx + (Math.random() - 0.5) * r * 2, ly + (Math.random() - 0.5) * r)
+      ctx.strokeStyle = `rgba(${col.r}, ${col.g}, ${col.b}, 0.4)`
+      ctx.lineWidth = 1 * s
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+  }
+}
+
+// ---- Death State ----
+
+function drawEmber(ctx: CanvasRenderingContext2D, world: WorldState) {
+  const { player, time, scale } = world
+  if (!player.emberVisible) return
+
+  const pulse = Math.sin(time * 3) * 0.3 + 0.7
+  const r = 6 * scale * pulse
+
+  // Faint warm glow
+  const haloR = r * 6
+  ctx.beginPath()
+  ctx.arc(player.emberX, player.emberY, haloR, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(255, 160, 60, ${0.06 * pulse})`
+  ctx.fill()
+
+  // Ember core
+  ctx.beginPath()
+  ctx.arc(player.emberX, player.emberY, r, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(255, 180, 80, ${0.5 * pulse})`
+  ctx.fill()
+
+  // Bright center
+  ctx.beginPath()
+  ctx.arc(player.emberX, player.emberY, r * 0.4, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(255, 220, 150, ${0.8 * pulse})`
+  ctx.fill()
+}
+
+// ---- Karma Visual Consequences ----
+
+function drawKarmaOverlay(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
+  const { karma } = world
+
+  // High corruption: sickly green-gray vignette
+  if (karma.corruption > 0.3) {
+    const intensity = (karma.corruption - 0.3) * 0.15
+    const grad = ctx.createRadialGradient(w / 2, h / 2, w * 0.2, w / 2, h / 2, w * 0.7)
+    grad.addColorStop(0, 'transparent')
+    grad.addColorStop(1, `rgba(40, 50, 35, ${intensity})`)
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, w, h)
+  }
+
+  // High hostility: cold edge tint
+  if (karma.hostility > 0.4) {
+    const intensity = (karma.hostility - 0.4) * 0.1
+    const grad = ctx.createRadialGradient(w / 2, h / 2, w * 0.3, w / 2, h / 2, w * 0.65)
+    grad.addColorStop(0, 'transparent')
+    grad.addColorStop(1, `rgba(30, 35, 60, ${intensity})`)
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, w, h)
+  }
+}
+
+function drawMuteGlyph(ctx: CanvasRenderingContext2D, w: number, h: number, muted: boolean, hovering: boolean) {
+  const dpr = window.devicePixelRatio || 1
+  const cx = w - 36 * dpr
+  const cy = h - 36 * dpr
+  const r = 10 * dpr
+  const alpha = hovering ? 0.5 : 0.25
+
+  ctx.save()
+
+  // Outer circle
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.strokeStyle = `hsla(180, 50%, 70%, ${alpha})`
+  ctx.lineWidth = 1.2 * dpr
+  ctx.stroke()
+
+  if (muted) {
+    // X mark when muted
+    const s = r * 0.5
+    ctx.beginPath()
+    ctx.moveTo(cx - s, cy - s)
+    ctx.lineTo(cx + s, cy + s)
+    ctx.moveTo(cx + s, cy - s)
+    ctx.lineTo(cx - s, cy + s)
+    ctx.strokeStyle = `hsla(180, 50%, 70%, ${alpha})`
+    ctx.lineWidth = 1.2 * dpr
+    ctx.stroke()
+  } else {
+    // Sound waves when unmuted — two small arcs
+    for (let i = 1; i <= 2; i++) {
+      const arcR = r * 0.25 * i
+      ctx.beginPath()
+      ctx.arc(cx - r * 0.15, cy, arcR, -Math.PI * 0.35, Math.PI * 0.35)
+      ctx.strokeStyle = `hsla(180, 50%, 70%, ${alpha * (1 - i * 0.25)})`
+      ctx.lineWidth = 1 * dpr
+      ctx.stroke()
+    }
+    // Small dot at center
+    ctx.beginPath()
+    ctx.arc(cx - r * 0.25, cy, 1.5 * dpr, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(180, 50%, 70%, ${alpha})`
+    ctx.fill()
+  }
+
+  ctx.restore()
 }
