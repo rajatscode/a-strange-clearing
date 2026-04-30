@@ -350,25 +350,45 @@ function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, wor
 }
 
 function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState, cam: Camera) {
-  const { mood, time } = world
-  const fogAlpha = 0.04 + mood.fogAmount * 0.06
+  const { mood, time, karma } = world
 
-  // Fog is drawn relative to camera viewport in world space
+  // Fog responds to karma:
+  // Beauty: warmer, golden/green tint, slightly thinner
+  // Corruption: thicker, gray, sickly
+  // Hostility: cold blue-purple tint
+  const corruptThicken = karma.corruption > 0.5 ? (karma.corruption - 0.5) * 0.12 : 0
+  const beautyThin = karma.beauty > 0.6 ? (karma.beauty - 0.6) * -0.04 : 0
+  const fogAlpha = 0.04 + mood.fogAmount * 0.06 + corruptThicken + beautyThin
+
+  // Hue shifts: beauty = warm green (150-160), corruption = gray (100), hostility = cold blue-purple (240)
+  const fogHue = karma.corruption > 0.5
+    ? 100 + (1 - karma.corruption) * 40  // gray-sickly
+    : karma.hostility > 0.6
+      ? 240 - (1 - karma.hostility) * 30  // cold blue-purple
+      : karma.beauty > 0.6
+        ? 150 + (karma.beauty - 0.6) * 30  // warm golden-green
+        : 175
+  const fogSat = karma.corruption > 0.5
+    ? 10 + (1 - karma.corruption) * 10  // desaturated
+    : karma.beauty > 0.6
+      ? 30 + (karma.beauty - 0.6) * 20  // warm saturation
+      : 25
+
   const cx = cam.x
   const cy = cam.y
 
   // Horizon fog
   const horizonY = cy + h * 0.45
   const horizonH = h * 0.3
-  ctx.fillStyle = `hsla(175, 25%, 25%, ${fogAlpha * 1.8})`
+  ctx.fillStyle = `hsla(${fogHue}, ${fogSat}%, 25%, ${fogAlpha * 1.8})`
   ctx.fillRect(cx, horizonY, w, horizonH)
-  ctx.fillStyle = `hsla(190, 20%, 18%, ${fogAlpha * 0.8})`
+  ctx.fillStyle = `hsla(${fogHue + 15}, ${fogSat - 5}%, 18%, ${fogAlpha * 0.8})`
   ctx.fillRect(cx, horizonY - h * 0.1, w, horizonH + h * 0.2)
 
   // Ground glow
-  ctx.fillStyle = `hsla(160, 30%, 10%, ${fogAlpha * 1.2})`
+  ctx.fillStyle = `hsla(${fogHue - 15}, ${fogSat + 5}%, 10%, ${fogAlpha * 1.2})`
   ctx.fillRect(cx, cy + h * 0.8, w, h * 0.2)
-  ctx.fillStyle = `hsla(150, 25%, 8%, ${fogAlpha * 1.5})`
+  ctx.fillStyle = `hsla(${fogHue - 25}, ${fogSat}%, 8%, ${fogAlpha * 1.5})`
   ctx.fillRect(cx, cy + h * 0.9, w, h * 0.1)
 
   // Drifting mist patches
@@ -377,34 +397,52 @@ function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: Wor
     const my = cy + h * (0.3 + i * 0.15) + Math.cos(time * 0.025 + i * 2.3) * h * 0.05
     const mw = w * 0.4
     const mh = h * 0.15
-    ctx.fillStyle = `hsla(${165 + i * 15}, 20%, 22%, ${fogAlpha * 0.7})`
+    ctx.fillStyle = `hsla(${fogHue + i * 15}, ${fogSat - 5}%, 22%, ${fogAlpha * 0.7})`
     ctx.fillRect(mx - mw / 2, my - mh / 2, mw, mh)
   }
 }
 
 function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState, layer: number, cam: Camera, w: number, h: number) {
+  const { karma } = world
   const layerScale = layer === 0 ? 0.6 : layer === 1 ? 1.0 : 1.5
   const alphaBase = layer === 0 ? 0.4 : layer === 1 ? 0.6 : 0.8
+
+  // Beauty: brighter particles, warmer hues
+  // Corruption: dimmer, colder/grayer
+  const beautyBright = karma.beauty > 0.6 ? 1.0 + (karma.beauty - 0.6) * 1.5 : 1.0
+  const corruptDim = karma.corruption > 0.5 ? 1.0 - (karma.corruption - 0.5) * 0.6 : 1.0
+  const brightMult = beautyBright * corruptDim
+
+  // Hue shift: corruption → gray/cold (sat drop), beauty → warmer
+  const satMult = karma.corruption > 0.5
+    ? 0.3 + (1 - karma.corruption) * 0.7  // desaturated
+    : 1.0 + (karma.beauty > 0.6 ? (karma.beauty - 0.6) * 0.5 : 0) // more vivid
 
   for (let i = 0; i < world.particles.length; i++) {
     const p = world.particles[i]
     if (p.layer !== layer) continue
     if (!onScreen(p.x, p.y, cam, w, h)) continue
 
+    // Corruption: skip some particles (fewer visible)
+    if (karma.corruption > 0.5 && (i % 3 === 0)) continue
+
     const r = p.radius * layerScale
-    const alpha = p.brightness * alphaBase
+    const alpha = p.brightness * alphaBase * brightMult
 
     if (alpha < 0.05) continue
+
+    const sat = Math.round(60 * satMult)
+    const coreSat = Math.round(70 * satMult)
 
     const haloR = r * 5
     ctx.beginPath()
     ctx.arc(p.x, p.y, haloR, 0, Math.PI * 2)
-    ctx.fillStyle = `hsla(${p.hue}, 60%, 55%, ${alpha * 0.06})`
+    ctx.fillStyle = `hsla(${p.hue}, ${sat}%, 55%, ${alpha * 0.06})`
     ctx.fill()
 
     ctx.beginPath()
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
-    ctx.fillStyle = `hsla(${p.hue}, 70%, 85%, ${alpha * 0.9})`
+    ctx.fillStyle = `hsla(${p.hue}, ${coreSat}%, 85%, ${alpha * 0.9})`
     ctx.fill()
   }
 }
@@ -413,51 +451,75 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
   const { mood, karma, time } = world
   const s = world.scale
 
-  const baseHue = 135 + mood.hueBias * 0.05
-  const baseSat = 35 + karma.beauty * 25
-  const baseLit = 18 + karma.beauty * 14
+  // Dramatic karma influence on grass appearance
+  // Beauty: more luminous tips, brighter, taller, warmer green
+  // Corruption: fewer luminous tips, gray/brown, dimmer, shorter
+  const beautyFactor = karma.beauty > 0.6 ? (karma.beauty - 0.6) / 0.4 : 0 // 0-1 for beauty > 0.6
+  const corruptFactor = karma.corruption > 0.5 ? (karma.corruption - 0.5) / 0.5 : 0 // 0-1 for corruption > 0.5
+  const hostileFactor = karma.hostility > 0.6 ? (karma.hostility - 0.6) / 0.4 : 0
+
+  // Luminous threshold: beauty 15%→40%, corruption 15%→5%
+  const luminousThreshold = karma.corruption > 0.5
+    ? 0.05 + (1 - corruptFactor) * 0.10
+    : 0.15 + beautyFactor * 0.25
+
+  // Base colors: beauty = vibrant green, corruption = gray-brown
+  const baseHue = karma.corruption > 0.5
+    ? 80 + (1 - corruptFactor) * 55 // shifts toward brown/gray
+    : 135 + mood.hueBias * 0.05 + beautyFactor * 15 // warmer green
+  const baseSat = karma.corruption > 0.5
+    ? 10 + (1 - corruptFactor) * 25 // very desaturated
+    : 35 + karma.beauty * 25 + beautyFactor * 15 // more vivid
+  const baseLit = karma.corruption > 0.5
+    ? 10 + (1 - corruptFactor) * 8 // dimmer
+    : 18 + karma.beauty * 14 + beautyFactor * 8 // brighter
+
+  // Height multiplier: beauty = taller, corruption = shorter
+  const heightMult = 1.0 + beautyFactor * 0.3 - corruptFactor * 0.3
+
+  // Wind multiplier: hostility = more erratic
+  const windMult = 1.0 + hostileFactor * 1.5
 
   ctx.lineCap = 'round'
 
   const h = world.worldHeight
   for (let i = 0; i < world.grass.length; i++) {
     const blade = world.grass[i]
-    // Cull grass outside viewport horizontally
     if (blade.x < cam.x - 50 || blade.x > cam.x + vpW + 50) continue
     const baseY = h
-    const bendOffset = blade.bend * blade.baseHeight * 0.5
+    const effectiveHeight = blade.baseHeight * heightMult
+    const bendOffset = blade.bend * windMult * effectiveHeight * 0.5
     const tipX = blade.x + bendOffset
-    const tipY = baseY - blade.baseHeight
+    const tipY = baseY - effectiveHeight
     const cpX = blade.x + bendOffset * 0.4
-    const cpY = baseY - blade.baseHeight * 0.5
+    const cpY = baseY - effectiveHeight * 0.5
 
-    const strokeW = 1.5 * s + blade.baseHeight * 0.008
+    const strokeW = 1.5 * s + effectiveHeight * 0.008
 
-    if (blade.luminous) {
+    // Determine if this blade should be luminous based on karma
+    const isLuminous = blade.luminous || (blade.phase / (Math.PI * 2)) < luminousThreshold
+
+    if (isLuminous && !corruptFactor) {
       const glowPulse = 0.4 + Math.sin(time * 1.8 + blade.phase) * 0.3 + Math.sin(time * 0.7 + blade.phase * 2) * 0.2
 
-      // Luminous tip glow — simple alpha circle instead of radial gradient
-      const glowSize = (18 + glowPulse * 12) * s
+      const glowSize = (18 + glowPulse * 12 + beautyFactor * 8) * s
       ctx.beginPath()
       ctx.arc(tipX, tipY, glowSize, 0, Math.PI * 2)
-      ctx.fillStyle = `hsla(${blade.hue}, 75%, 60%, ${0.08 + glowPulse * 0.12})`
+      ctx.fillStyle = `hsla(${blade.hue}, 75%, 60%, ${(0.08 + glowPulse * 0.12) * (1 + beautyFactor * 0.5)})`
       ctx.fill()
 
-      // Luminous blade stroke — solid color with luminous hue (no gradient)
       ctx.beginPath()
       ctx.moveTo(blade.x, baseY)
       ctx.quadraticCurveTo(cpX, cpY, tipX, tipY)
-      ctx.strokeStyle = `hsl(${blade.hue}, 70%, ${22 + glowPulse * 20}%)`
+      ctx.strokeStyle = `hsl(${blade.hue}, 70%, ${22 + glowPulse * 20 + beautyFactor * 10}%)`
     } else {
-      // Non-luminous blade — solid color instead of per-blade gradient
-      // Height-based lightness variation preserves the depth illusion
       ctx.beginPath()
       ctx.moveTo(blade.x, baseY)
       ctx.quadraticCurveTo(cpX, cpY, tipX, tipY)
-      const heightFrac = blade.baseHeight / (320 * s)
+      const heightFrac = effectiveHeight / (320 * s)
       const lit = baseLit * (0.5 + heightFrac * 0.5)
       const sat = baseSat * (0.5 + heightFrac * 0.5)
-      ctx.strokeStyle = `hsl(${baseHue + heightFrac * 15}, ${sat}%, ${lit}%)`
+      ctx.strokeStyle = `hsl(${baseHue + heightFrac * 15}, ${Math.max(5, sat)}%, ${Math.max(3, lit)}%)`
     }
 
     ctx.lineWidth = Math.max(strokeW, 2 * s)
@@ -862,25 +924,33 @@ function drawEmber(ctx: CanvasRenderingContext2D, world: WorldState) {
 function drawKarmaOverlay(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
   const { karma } = world
 
-  // High corruption: sickly green-gray edge tint (simple rects for vignette)
+  // High corruption: sickly green-gray vignette — MUCH more visible
   if (karma.corruption > 0.3) {
-    const intensity = (karma.corruption - 0.3) * 0.12
+    const intensity = (karma.corruption - 0.3) * 0.25
     ctx.fillStyle = `rgba(40, 50, 35, ${intensity})`
-    const edge = w * 0.12
+    const edge = w * 0.18
     ctx.fillRect(0, 0, edge, h)
     ctx.fillRect(w - edge, 0, edge, h)
     ctx.fillRect(0, 0, w, edge)
     ctx.fillRect(0, h - edge, w, edge)
   }
 
-  // High hostility: cold edge tint (simple rects for vignette)
+  // High hostility: cold blue-purple vignette — more intense
   if (karma.hostility > 0.4) {
-    const intensity = (karma.hostility - 0.4) * 0.08
-    ctx.fillStyle = `rgba(30, 35, 60, ${intensity})`
-    const edge = w * 0.1
+    const intensity = (karma.hostility - 0.4) * 0.18
+    ctx.fillStyle = `rgba(30, 25, 70, ${intensity})`
+    const edge = w * 0.15
     ctx.fillRect(0, 0, edge, h)
     ctx.fillRect(w - edge, 0, edge, h)
     ctx.fillRect(0, 0, w, edge)
+    ctx.fillRect(0, h - edge, w, edge)
+  }
+
+  // High beauty: warm golden glow at edges
+  if (karma.beauty > 0.6) {
+    const intensity = (karma.beauty - 0.6) * 0.08
+    ctx.fillStyle = `rgba(80, 120, 60, ${intensity})`
+    const edge = w * 0.1
     ctx.fillRect(0, h - edge, w, edge)
   }
 }
