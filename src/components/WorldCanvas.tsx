@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react'
 import type { WorldState, Entity } from '../lib/simulation'
-import { createWorld, updateWorld, addRipple, addFlash, findNavNodeAt, handleWorldClick, getVisibleChunks, ENTITY_COLORS } from '../lib/simulation'
+import { createWorld, updateWorld, addRipple, addFlash, findNavNodeAt, handleWorldClick, ENTITY_COLORS } from '../lib/simulation'
 import { AudioEngine } from './AudioEngine'
 
 export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (route: string) => void; muffled?: boolean }) {
@@ -340,11 +340,8 @@ function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState,
   const layerScale = layer === 0 ? 0.6 : layer === 1 ? 1.0 : 1.5
   const alphaBase = layer === 0 ? 0.4 : layer === 1 ? 0.6 : 0.8
 
-  const chunks = getVisibleChunks(world)
-  for (let c = 0; c < chunks.length; c++) {
-    const chunk = chunks[c]
-    for (let i = 0; i < chunk.particles.length; i++) {
-    const p = chunk.particles[i]
+  for (let i = 0; i < world.particles.length; i++) {
+    const p = world.particles[i]
     if (p.layer !== layer) continue
 
     const r = p.radius * layerScale
@@ -352,19 +349,16 @@ function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState,
 
     if (alpha < 0.05) continue
 
-    // Glow halo — simple alpha circle (no gradient)
     const haloR = r * 5
     ctx.beginPath()
     ctx.arc(p.x, p.y, haloR, 0, Math.PI * 2)
     ctx.fillStyle = `hsla(${p.hue}, 60%, 55%, ${alpha * 0.06})`
     ctx.fill()
 
-    // Core
     ctx.beginPath()
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
     ctx.fillStyle = `hsla(${p.hue}, 70%, 85%, ${alpha * 0.9})`
     ctx.fill()
-  }
   }
 }
 
@@ -378,13 +372,10 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number)
 
   ctx.lineCap = 'round'
 
-  const chunks = getVisibleChunks(world)
-  for (let c = 0; c < chunks.length; c++) {
-    const chunk = chunks[c]
-    for (let i = 0; i < chunk.grass.length; i++) {
-    const blade = chunk.grass[i]
-    // Grass grows upward from its y position
-    const baseY = blade.y
+  const h = world.scale * 800
+  for (let i = 0; i < world.grass.length; i++) {
+    const blade = world.grass[i]
+    const baseY = h
     const bendOffset = blade.bend * blade.baseHeight * 0.5
     const tipX = blade.x + bendOffset
     const tipY = baseY - blade.baseHeight
@@ -422,7 +413,6 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number)
 
     ctx.lineWidth = Math.max(strokeW, 2 * s)
     ctx.stroke()
-  }
   }
 }
 
