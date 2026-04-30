@@ -937,26 +937,28 @@ function drawEmber(ctx: CanvasRenderingContext2D, world: WorldState) {
   const { player, time, scale } = world
   if (!player.emberVisible) return
 
-  const pulse = Math.sin(time * 3) * 0.3 + 0.7
-  const r = 6 * scale * pulse
+  // Irregular, weak flickering — barely holding on
+  const flicker = Math.sin(time * 4) * Math.sin(time * 7.3) * Math.sin(time * 2.1)
+  const pulse = 0.3 + flicker * 0.25 + Math.sin(time * 11.7) * 0.1
+  const r = 5 * scale * Math.max(0.3, pulse)
 
-  // Faint warm glow
-  const haloR = r * 6
+  // Faint warm glow — fluttering
+  const haloR = r * 5
   ctx.beginPath()
   ctx.arc(player.emberX, player.emberY, haloR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(255, 160, 60, ${0.06 * pulse})`
+  ctx.fillStyle = `rgba(255, 160, 60, ${0.04 * Math.max(0, pulse)})`
   ctx.fill()
 
-  // Ember core
+  // Ember core — weak
   ctx.beginPath()
   ctx.arc(player.emberX, player.emberY, r, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(255, 180, 80, ${0.5 * pulse})`
+  ctx.fillStyle = `rgba(255, 180, 80, ${0.35 * Math.max(0, pulse)})`
   ctx.fill()
 
-  // Bright center
+  // Bright center — barely there
   ctx.beginPath()
-  ctx.arc(player.emberX, player.emberY, r * 0.4, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(255, 220, 150, ${0.8 * pulse})`
+  ctx.arc(player.emberX, player.emberY, r * 0.35, 0, Math.PI * 2)
+  ctx.fillStyle = `rgba(255, 220, 150, ${0.6 * Math.max(0, pulse)})`
   ctx.fill()
 }
 

@@ -5,7 +5,7 @@ import ArtifactsPage from './components/ArtifactsPage'
 import BioPage from './components/BioPage'
 
 type Route = 'clearing' | 'notes' | 'artifacts' | 'bio'
-type TransitionPhase = 'idle' | 'fade-out' | 'fade-in'
+type TransitionPhase = 'idle' | 'bloom' | 'fade-out' | 'blackout' | 'fade-in'
 
 function parseHash(): Route {
   const h = window.location.hash
@@ -40,17 +40,33 @@ export default function App() {
   const navigateTo = useCallback((next: Route) => {
     if (phase !== 'idle') return
     setRoute(next)
-    setPhase('fade-out')
 
-    // After fade-out, swap content and fade-in
-    setTimeout(() => {
-      setDisplayRoute(next)
-      setPhase('fade-in')
-
+    if (next !== 'clearing') {
+      // Leaving clearing: bloom → fade-out → blackout → swap → fade-in
+      setPhase('bloom')
       setTimeout(() => {
-        setPhase('idle')
+        setPhase('fade-out')
+        setTimeout(() => {
+          setPhase('blackout')
+          setTimeout(() => {
+            setDisplayRoute(next)
+            setPhase('fade-in')
+            setTimeout(() => setPhase('idle'), 500)
+          }, 200)
+        }, 400)
+      }, 200)
+    } else {
+      // Returning to clearing: fade-out → blackout → swap → fade-in
+      setPhase('fade-out')
+      setTimeout(() => {
+        setPhase('blackout')
+        setTimeout(() => {
+          setDisplayRoute(next)
+          setPhase('fade-in')
+          setTimeout(() => setPhase('idle'), 500)
+        }, 300)
       }, 400)
-    }, 400)
+    }
   }, [phase])
 
   const handleNavigate = useCallback((hashRoute: string) => {
@@ -67,7 +83,9 @@ export default function App() {
     navigateTo('clearing')
   }, [navigateTo])
 
-  const opacity = phase === 'fade-out' ? 0 : phase === 'fade-in' ? 1 : 1
+  const canvasOpacity = phase === 'fade-out' || phase === 'blackout' ? 0 : 1
+  const pageOpacity = phase === 'fade-out' || phase === 'blackout' ? 0 : phase === 'fade-in' ? 1 : 1
+  const bloomActive = phase === 'bloom'
 
   return (
     <div className="w-full h-full bg-[#050608]">
@@ -77,16 +95,25 @@ export default function App() {
         position: displayRoute === 'clearing' ? 'relative' : 'fixed',
         width: '100%',
         height: '100%',
-        opacity: displayRoute === 'clearing' ? opacity : 0,
-        transition: 'opacity 400ms ease-in-out',
+        opacity: displayRoute === 'clearing' ? canvasOpacity : 0,
+        transition: `opacity ${phase === 'fade-out' ? 400 : 500}ms ease-in-out`,
       }}>
         <WorldCanvas onNavigate={handleNavigate} muffled={displayRoute !== 'clearing'} />
+        {bloomActive && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(255, 255, 255, 0.15)',
+            pointerEvents: 'none',
+            animation: 'bloom-flash 200ms ease-out forwards',
+          }} />
+        )}
       </div>
       {displayRoute !== 'clearing' && (
         <div
           style={{
-            opacity,
-            transition: 'opacity 400ms ease-in-out',
+            opacity: pageOpacity,
+            transition: 'opacity 500ms ease-in-out',
             width: '100%',
             height: '100%',
           }}

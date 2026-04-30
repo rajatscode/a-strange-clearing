@@ -456,7 +456,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
       player.emberVisible = false
       karma.corruption = Math.min(1, karma.corruption + 0.05)
 
-      // Revival — gentle pull on nearby entities
+      // Revival — gentle pull on nearby entities + beauty bloom + warm flash
       const s = state.scale
       for (let i = 0; i < state.entities.length; i++) {
         const e = state.entities[i]
@@ -469,6 +469,9 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
           e.vy -= (dy / dist) * 0.5
         }
       }
+      addBeautyBloom(state, player.x, player.y, 250)
+      addFlash(state, player.x, player.y, 255, 200, 120, 100 * s)
+      state.worldEvents.transcendence = true
 
       return { type: 'ember_revive' }
     }
@@ -612,7 +615,8 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
     karma.beauty = Math.max(0, karma.beauty - dt * 0.003)
     karma.trust = Math.max(0, karma.trust - dt * 0.002)
 
-    updateEntities(state, dt, viewportWidth, viewportHeight)
+    // Life goes on without you — entities speed up while dead
+    updateEntities(state, dt * 1.3, viewportWidth, viewportHeight)
     rebuildConnectionLines(state)
     checkCooperatorClusters(state, dt)
     checkSpawning(state, dt, viewportWidth, viewportHeight)
@@ -692,15 +696,19 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
     player.emberVisible = false
     karma.deaths++
 
-    // Entities scatter on player death
+    // World visibly cools on death
+    karma.beauty = Math.max(0, karma.beauty - 0.1)
+    karma.hostility = Math.min(1, karma.hostility + 0.05)
+
+    // Entities scatter on player death — strong outward force
     for (let i = 0; i < state.entities.length; i++) {
       const e = state.entities[i]
       if (!e.alive) continue
       const dx = e.x - player.x
       const dy = e.y - player.y
       const dist = Math.sqrt(dx * dx + dy * dy)
-      if (dist < 250 * s && dist > 0) {
-        const force = (1 - dist / (250 * s)) * 3
+      if (dist < 350 * s && dist > 0) {
+        const force = (1 - dist / (350 * s)) * 5
         e.vx += (dx / dist) * force
         e.vy += (dy / dist) * force
       }
