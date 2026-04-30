@@ -158,8 +158,10 @@ export class AudioEngine {
     const hostility = this.lastParams.hostility ?? 0.1
     const trust = this.lastParams.trust ?? 0.5
 
-    // Higher beauty/trust = more frequent chimes
-    const baseInterval = 4000 + (1 - beauty) * 8000 + hostility * 6000
+    // Beautiful world: frequent, gentle chimes. Hostile world: rare, sparse.
+    const baseInterval = beauty > 0.7
+      ? 2000 + (1 - beauty) * 3000  // frequent in beautiful worlds
+      : 4000 + (1 - beauty) * 10000 + hostility * 10000  // very rare when hostile
     const jitter = Math.random() * baseInterval * 0.6
     const interval = baseInterval + jitter
 
@@ -177,27 +179,61 @@ export class AudioEngine {
     const ctx = this.ctx!
     const now = ctx.currentTime
 
-    // Pick scale based on mood
-    const scale = hostility > 0.5 ? MINOR_PENTATONIC : PENTATONIC
-    const rootMidi = 72 // C5
+    // Pick scale based on mood — hostile = minor/dissonant, beautiful = major pentatonic
+    const scale = hostility > 0.6 ? MINOR_PENTATONIC : PENTATONIC
+    // Hostile/corrupt: lower root for ominous tone. Beautiful: higher, bell-like.
+    const rootMidi = hostility > 0.6 ? 60 : beauty > 0.7 ? 76 : 72
     const interval = scale[Math.floor(Math.random() * scale.length)]
-    const octaveShift = Math.random() < 0.3 ? 12 : 0
+    const octaveShift = beauty > 0.7
+      ? (Math.random() < 0.4 ? 12 : 0)  // more upper octave sparkle when beautiful
+      : hostility > 0.6
+        ? (Math.random() < 0.2 ? -12 : 0)  // occasional low rumble when hostile
+        : (Math.random() < 0.3 ? 12 : 0)
     const freq = midiToFreq(rootMidi + interval + octaveShift)
 
     const osc = ctx.createOscillator()
-    osc.type = 'sine'
+    // Beautiful = pure sine (bell-like). Hostile = triangle (harsher harmonics).
+    osc.type = hostility > 0.6 ? 'triangle' : 'sine'
     osc.frequency.value = freq
 
     const gain = ctx.createGain()
-    const volume = 0.03 + beauty * 0.04
+    // Beautiful: louder, richer chimes. Hostile: quieter, thinner.
+    const volume = beauty > 0.7
+      ? 0.05 + beauty * 0.06  // prominent and warm
+      : hostility > 0.6
+        ? 0.015 + (1 - hostility) * 0.02  // thin and distant
+        : 0.03 + beauty * 0.04
+    // Beautiful: longer, lingering decay. Hostile: short, clipped.
+    const decayTime = beauty > 0.7
+      ? 2.5 + trust * 2.5  // long shimmer
+      : hostility > 0.6
+        ? 0.6 + trust * 0.4  // short, unsettling
+        : 1.5 + trust * 1.5
     gain.gain.setValueAtTime(0, now)
-    gain.gain.linearRampToValueAtTime(volume, now + 0.02) // fast attack
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.5 + trust * 1.5) // slow decay
+    gain.gain.linearRampToValueAtTime(volume, now + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + decayTime)
 
     osc.connect(gain)
     gain.connect(this.master!)
     osc.start(now)
-    osc.stop(now + 3)
+    osc.stop(now + decayTime + 0.5)
+
+    // In hostile worlds, add a dissonant second tone
+    if (hostility > 0.6 && Math.random() < hostility * 0.6) {
+      const dissonantFreq = freq * (1 + (Math.random() * 0.06 - 0.03)) // microtonal clash
+      const osc2 = ctx.createOscillator()
+      osc2.type = 'sine'
+      osc2.frequency.value = dissonantFreq
+      const gain2 = ctx.createGain()
+      gain2.gain.setValueAtTime(0, now)
+      gain2.gain.linearRampToValueAtTime(volume * 0.5, now + 0.05)
+      gain2.gain.exponentialRampToValueAtTime(0.0001, now + decayTime * 0.7)
+      osc2.connect(gain2)
+      gain2.connect(this.master!)
+      osc2.start(now + 0.03) // slightly delayed for eerie effect
+      osc2.stop(now + decayTime + 0.5)
+      osc2.onended = () => { osc2.disconnect(); gain2.disconnect() }
+    }
 
     // Cleanup after decay
     osc.onended = () => {
@@ -278,42 +314,81 @@ export class AudioEngine {
     if (this.droneFilter && (
       Math.abs((last.beauty ?? 0) - params.beauty) > DELTA ||
       Math.abs((last.corruption ?? 0) - params.corruption) > DELTA ||
+      Math.abs((last.hostility ?? 0) - params.hostility) > DELTA ||
       Math.abs((params.mood?.audioWarmth ?? 0) - (last.mood?.audioWarmth ?? 0)) > DELTA
     )) {
       const warmth = params.mood.audioWarmth
-      const cutoff = 200 + warmth * 250 + params.beauty * 200 - params.corruption * 100
-      this.droneFilter.frequency.setTargetAtTime(Math.max(100, cutoff), now, 0.5)
+      // Beautiful world: open, warm filter. Corrupt world: muffled and thin.
+      const beautyCutoff = params.beauty > 0.7 ? params.beauty * 600 : params.beauty * 300
+      const corruptionDrop = params.corruption > 0.5 ? params.corruption * 350 : params.corruption * 150
+      const cutoff = 150 + warmth * 300 + beautyCutoff - corruptionDrop
+      this.droneFilter.frequency.setTargetAtTime(Math.max(80, cutoff), now, 0.5)
+      // Beautiful world: gentle resonance bloom. Corrupt: harsh narrow resonance.
+      const q = params.beauty > 0.7
+        ? 1.0 + params.beauty * 0.5
+        : params.corruption > 0.5
+          ? 2.5 + params.corruption * 3.0
+          : 1.5
+      this.droneFilter.Q.setTargetAtTime(q, now, 0.5)
 
-      // Increase detuning with corruption
-      const detuneAmount = 3 + params.corruption * 15
+      // Detuning: beauty = gentle pleasant chorus, corruption = ugly dissonance
+      const beautyChorus = params.beauty > 0.7 ? 1.5 + params.beauty * 2.0 : 2.0
+      const corruptDetune = params.corruption > 0.5
+        ? 8 + params.corruption * 30  // severe dissonance
+        : 3 + params.corruption * 10
+      const detuneAmount = beautyChorus + corruptDetune
       if (this.droneOscs[1]) {
         this.droneOscs[1].frequency.setTargetAtTime(95 + detuneAmount, now, 0.3)
       }
       if (this.droneOscs[2]) {
-        this.droneOscs[2].frequency.setTargetAtTime(95 - detuneAmount * 1.2, now, 0.3)
+        this.droneOscs[2].frequency.setTargetAtTime(95 - detuneAmount * 1.3, now, 0.3)
       }
 
-      // Volume responds to beauty
+      // Volume: beauty makes drone rich and full, corruption thins it out
       for (let i = 0; i < this.droneGains.length; i++) {
         const baseVol = i === 0 ? 0.12 : 0.06
-        const vol = baseVol * (0.6 + params.beauty * 0.6)
+        const beautyBoost = params.beauty > 0.7 ? 1.0 + (params.beauty - 0.7) * 2.0 : 0.5 + params.beauty * 0.7
+        const corruptionDrain = params.corruption > 0.5 ? 1.0 - (params.corruption - 0.5) * 0.6 : 1.0
+        const vol = baseVol * beautyBoost * corruptionDrain
         this.droneGains[i].gain.setTargetAtTime(vol, now, 0.3)
+      }
+
+      // Hostility shifts root drone pitch down for ominous feel
+      if (params.hostility > 0.6) {
+        const pitchDrop = (params.hostility - 0.6) * 15 // up to ~6Hz lower
+        this.droneOscs[0]?.frequency.setTargetAtTime(95 - pitchDrop, now, 0.5)
+      } else {
+        this.droneOscs[0]?.frequency.setTargetAtTime(95, now, 0.5)
       }
     }
 
     // Noise: adjust based on wind and corruption
     if (this.noiseFilter && this.noiseGain && (
       Math.abs((params.mood?.windStrength ?? 0) - (last.mood?.windStrength ?? 0)) > DELTA ||
-      Math.abs((last.corruption ?? 0) - params.corruption) > DELTA
+      Math.abs((last.corruption ?? 0) - params.corruption) > DELTA ||
+      Math.abs((last.beauty ?? 0) - params.beauty) > DELTA
     )) {
-      const windFreq = 600 + params.mood.windStrength * 800
+      // Beautiful world: soft high breeze. Corrupt world: harsh low rumble.
+      const windFreq = params.corruption > 0.5
+        ? 300 + params.mood.windStrength * 400  // low harsh band
+        : 600 + params.mood.windStrength * 800 + params.beauty * 400  // airy high band
+
       this.noiseFilter.frequency.setTargetAtTime(windFreq, now, 1.0)
 
-      // Corruption widens bandwidth and increases volume
-      const q = 2.5 - params.corruption * 1.8
-      this.noiseFilter.Q.setTargetAtTime(Math.max(0.5, q), now, 0.5)
+      // Corruption widens bandwidth dramatically — harsh static
+      const q = params.corruption > 0.5
+        ? 0.8 - (params.corruption - 0.5) * 1.0  // very wide = harsh
+        : params.beauty > 0.7
+          ? 4.0 + params.beauty * 2.0  // narrow = gentle breeze
+          : 2.5 - params.corruption * 1.8
+      this.noiseFilter.Q.setTargetAtTime(Math.max(0.3, q), now, 0.5)
 
-      const vol = 0.012 + params.corruption * 0.02 + params.mood.windStrength * 0.008
+      // Volume: corruption makes noise prominent, beauty quiets it
+      const vol = params.corruption > 0.5
+        ? 0.02 + (params.corruption - 0.5) * 0.06 + params.mood.windStrength * 0.01
+        : params.beauty > 0.7
+          ? 0.006 + params.mood.windStrength * 0.005  // barely audible in beauty
+          : 0.012 + params.corruption * 0.02 + params.mood.windStrength * 0.008
       this.noiseGain.gain.setTargetAtTime(vol, now, 0.5)
     }
 
@@ -348,6 +423,18 @@ export class AudioEngine {
 
     // Store for delta checks
     this.lastParams = { ...params, mood: { ...params.mood } }
+  }
+
+  setMuffled(muffled: boolean): void {
+    if (!this.ctx || !this.master || !this.deathFilter) return
+    const now = this.ctx.currentTime
+    if (muffled) {
+      this.deathFilter.frequency.setTargetAtTime(600, now, 1.0)
+      this.master.gain.setTargetAtTime(this.muted ? 0 : 0.08, now, 1.0)
+    } else {
+      this.deathFilter.frequency.setTargetAtTime(20000, now, 1.0)
+      this.master.gain.setTargetAtTime(this.muted ? 0 : 0.2, now, 1.0)
+    }
   }
 
   toggle(): void {

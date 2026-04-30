@@ -73,7 +73,7 @@ export default function App() {
         opacity: displayRoute === 'clearing' ? opacity : 0,
         transition: 'opacity 400ms ease-in-out',
       }}>
-        <WorldCanvas onNavigate={handleNavigate} />
+        <WorldCanvas onNavigate={handleNavigate} muffled={displayRoute !== 'clearing'} />
       </div>
       {displayRoute !== 'clearing' && (
         <div
