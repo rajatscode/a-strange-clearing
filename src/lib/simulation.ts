@@ -2,6 +2,16 @@ import type { CosmicMood } from './mood'
 import { getCosmicMood } from './mood'
 import type { KarmaState } from './persistence'
 import { loadKarma, saveKarma } from './persistence'
+import type { Centipede } from './centipede'
+import { createCentipede, updateCentipede, getHeadPosition, addSegment } from './centipede'
+import type { Tree } from './tree'
+import { generateTree, updateLeafHealth, updateLeaves } from './tree'
+import type { StarField } from './stars'
+import { createStarField, updateStarField, addDust } from './stars'
+import type { AgentSystem } from './agents'
+import { createAgentSystem, updateAgents } from './agents'
+import type { PotState } from './pot'
+import { createPot, updatePot } from './pot'
 
 export type Player = {
   x: number
@@ -85,12 +95,7 @@ export type Flash = {
   alpha: number
 }
 
-export type Star = {
-  x: number
-  y: number
-  brightness: number
-  phase: number
-}
+// Note: Star type is now in ./stars.ts as part of the StarField system
 
 export type DeathParticle = {
   x: number
@@ -156,6 +161,10 @@ export type TextFragment = {
 
 export type WorldState = {
   player: Player
+  centipede: Centipede
+  tree: Tree
+  agents: AgentSystem
+  pot: PotState
   entities: Entity[]
   particles: Particle[]
   grass: GrassBlade[]
@@ -163,7 +172,7 @@ export type WorldState = {
   flashes: Flash[]
   navNodes: NavNode[]
   falseBeacons: Array<{ x: number; y: number; revealed: number; phase: number; alive: boolean }>
-  stars: Star[]
+  starField: StarField
   deathParticles: DeathParticle[]
   beautyBlooms: BeautyBloom[]
   connectionLines: ConnectionLine[]
@@ -191,6 +200,8 @@ export type WorldState = {
   }
   mouseSpeed: number
   mouseSmoothed: number
+  mouseScreenX: number
+  mouseScreenY: number
   time: number
   scale: number
   lastClickTime: number
@@ -296,9 +307,9 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
   const mood = getCosmicMood()
   const scale = viewportHeight / 800
 
-  // World is larger than viewport
+  // World must accommodate leaf field (~1500px) + sky for stars (~500px) + ground padding
   const worldWidth = viewportWidth * 5
-  const worldHeight = viewportHeight * 3
+  const worldHeight = viewportHeight * 6
 
   const worldRatio = (worldWidth / viewportWidth) * (worldHeight / viewportHeight)
   const isMobile = 'ontouchstart' in window || window.innerWidth < 768
@@ -347,9 +358,13 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
   const entities = spawnEntities(worldWidth, worldHeight, scale, karma.totalVisits)
   const navNodes = createNavNodes(worldWidth, worldHeight, karma)
 
-  // Player starts at center of world
-  const startX = worldWidth / 2
-  const startY = worldHeight / 2
+  // Generate procedural tree -- seed from visit count for deterministic-per-visitor variation
+  const treeSeed = 42 + karma.totalVisits * 7
+  const tree = generateTree(treeSeed, viewportWidth, viewportHeight)
+
+  // Player starts at tree base (trunk origin)
+  const startX = tree.originX
+  const startY = tree.originY
 
   return {
     player: {
@@ -370,6 +385,10 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
       emberVisible: false,
       glowBoost: 0,
     },
+    centipede: createCentipede(startX, startY),
+    tree,
+    agents: createAgentSystem(tree),
+    pot: createPot(),
     entities,
     particles,
     grass,
@@ -377,7 +396,7 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
     flashes: [],
     navNodes,
     falseBeacons: [],
-    stars: [],
+    starField: createStarField(tree),
     deathParticles: [],
     beautyBlooms: [],
     connectionLines: [],
@@ -405,6 +424,8 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
     },
     mouseSpeed: 0,
     mouseSmoothed: 0,
+    mouseScreenX: 0,
+    mouseScreenY: 0,
     time: 0,
     scale,
     lastClickTime: 0,
@@ -523,6 +544,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
           karma.corruption = Math.min(1, karma.corruption + 0.03)
         }
         addFlash(state, e.x, e.y, 80, 120, 200, 60 * state.scale)  // cold blue flash
+        addDust(state.starField, e.x, e.y, false, 3) // black dust from harvesting
         return { type: 'fragile_harvest', entityIndex: idx }
       } else if (player.energy > 0.1) {
         // NOURISH — generous path (stronger at high energy)
@@ -538,6 +560,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
         karma.navigability = Math.min(1, karma.navigability + 0.1)
         addBeautyBloom(state, e.x, e.y, 150)
         addFlash(state, e.x, e.y, 255, 220, 140, 80 * state.scale)
+        addDust(state.starField, e.x, e.y, true, 4) // golden dust from nourishing
         return { type: 'fragile_nourish', entityIndex: idx }
       }
     }
@@ -568,6 +591,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
           karma.corruption = Math.min(1, karma.corruption + 0.05)
         }
         addFlash(state, e.x, e.y, 140, 80, 200, 80 * state.scale)  // cold purple flash
+        addDust(state.starField, e.x, e.y, false, 5) // black dust from draining cooperator
         return { type: 'cooperator_drain', entityIndex: idx }
       } else {
         // MUTUAL EXCHANGE — cooperative path
@@ -581,6 +605,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
         const my = (player.y + e.y) / 2
         addBeautyBloom(state, mx, my, 120)
         addFlash(state, mx, my, 100, 240, 180, 60 * state.scale)
+        addDust(state.starField, mx, my, true, 6) // golden dust from cooperation
         return { type: 'cooperator_exchange', entityIndex: idx }
       }
     }
@@ -600,6 +625,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
         e.vy += (fdy / fdist) * 3.0
       }
       addFlash(state, player.x, player.y, 180, 60, 40, 50 * state.scale)  // player dimming flash
+      addDust(state.starField, e.x, e.y, false, 4) // black dust from defection
       return { type: 'defector_risk', entityIndex: idx }
     }
 
@@ -715,28 +741,34 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   state.worldEvents.corruptionSpread = false
   state.worldEvents.cleanseSuccess = false
 
-  // Update camera — follow player when near edge (20% threshold)
-  const edgeX = viewportWidth * 0.2
-  const edgeY = viewportHeight * 0.2
-  const playerScreenX = player.x - camera.x
-  const playerScreenY = player.y - camera.y
+  // Platformer dead-zone camera: head moves freely within center of screen.
+  // Camera only scrolls when head reaches the edge of the dead zone.
+  const headPos = getHeadPosition(state.centipede)
+  const headScreenX = headPos.x - camera.x
+  const headScreenY = headPos.y - camera.y
+
+  // Dead zone: head can be anywhere in the middle 50% of the screen
+  const dzLeft = viewportWidth * 0.25
+  const dzRight = viewportWidth * 0.75
+  const dzTop = viewportHeight * 0.2
+  const dzBottom = viewportHeight * 0.75
 
   let targetCamX = camera.x
   let targetCamY = camera.y
 
-  if (playerScreenX < edgeX) targetCamX = player.x - edgeX
-  else if (playerScreenX > viewportWidth - edgeX) targetCamX = player.x - (viewportWidth - edgeX)
+  if (headScreenX < dzLeft) targetCamX = headPos.x - dzLeft
+  else if (headScreenX > dzRight) targetCamX = headPos.x - dzRight
 
-  if (playerScreenY < edgeY) targetCamY = player.y - edgeY
-  else if (playerScreenY > viewportHeight - edgeY) targetCamY = player.y - (viewportHeight - edgeY)
+  if (headScreenY < dzTop) targetCamY = headPos.y - dzTop
+  else if (headScreenY > dzBottom) targetCamY = headPos.y - dzBottom
 
-  // Clamp camera to world bounds
+  // Clamp to world bounds
   targetCamX = Math.max(0, Math.min(state.worldWidth - viewportWidth, targetCamX))
   targetCamY = Math.max(0, Math.min(state.worldHeight - viewportHeight, targetCamY))
 
-  // Smooth lerp
-  camera.x += (targetCamX - camera.x) * 0.08
-  camera.y += (targetCamY - camera.y) * 0.08
+  // Smooth follow
+  camera.x += (targetCamX - camera.x) * 0.15
+  camera.y += (targetCamY - camera.y) * 0.15
 
   if (Math.floor(state.time * 0.5) !== Math.floor((state.time - dt) * 0.5)) {
     Object.assign(state.mood, getCosmicMood())
@@ -760,6 +792,9 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
 
     // Life goes on without you — entities speed up while dead
     updateEntities(state, dt * 1.3, viewportWidth, viewportHeight)
+    updateAgents(state.agents, state.tree, state.centipede.currentLeaf, dt, state.time)
+    updateLeaves(state.tree, dt, state.time)
+    updateStarField(state.starField, state.tree, state.karma, dt, state.time)
     rebuildConnectionLines(state)
     checkCooperatorClusters(state, dt)
     checkSpawning(state, dt, viewportWidth, viewportHeight)
@@ -771,14 +806,21 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
     updateBeautyBlooms(state, dt)
     updateGroundScars(state, dt)
     updateSmoothKarma(state)
+    updateLeafHealth(state.tree, dt, karma.beauty)
+    updateStarField(state.starField, state.tree, karma, dt, state.time)
     periodicSave(state, dt)
     return
   }
 
-  // Player follows mouse — sluggish when low energy
-  const lerpFactor = player.energy < 0.2 ? 0.04 : 0.12
-  player.x += (player.targetX - player.x) * lerpFactor
-  player.y += (player.targetY - player.y) * lerpFactor
+  // Centipede hops between leaves based on mouse proximity to reachable leaves
+  updateCentipede(state.centipede, state.mouseScreenX, state.mouseScreenY, viewportWidth, viewportHeight, camera.x, camera.y, dt, state.tree)
+
+  // Sync player position with centipede head for backwards compat with other systems
+  const centipedeHead = getHeadPosition(state.centipede)
+  player.x = centipedeHead.x
+  player.y = centipedeHead.y
+  player.targetX = player.x
+  player.targetY = player.y
 
   const s = state.scale
   player.aura = (25 + Math.sin(state.time * 2) * 8 + Math.min(player.energy, 1) * 15 + Math.max(0, player.energy - 1) * 30) * s
@@ -884,6 +926,44 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   updateFalseBeacons(state, dt)
   updateEntityHoverInteractions(state, dt)
   updateEntities(state, dt, viewportWidth, viewportHeight)
+  updateAgents(state.agents, state.tree, state.centipede.currentLeaf, dt, state.time)
+  updateLeaves(state.tree, dt, state.time)
+  updateStarField(state.starField, state.tree, state.karma, dt, state.time)
+
+  // Pot mechanic — cooperation/defection
+  const potResult = updatePot(state.pot, state.agents, state.centipede, state.tree, state.karma, dt)
+  if (potResult.type === 'both_cooperate') {
+    // Positive-sum: each gets potSize * 0.75, player gains segment, golden dust
+    player.energy = Math.min(3.0, player.energy + potResult.potSize * 0.75 * 0.05)
+    addDust(state.starField, potResult.x, potResult.y, true, potResult.potSize * 0.5)
+    addSegment(state.centipede)
+    karma.beauty = Math.min(1, karma.beauty + 0.04)
+    karma.trust = Math.min(1, karma.trust + 0.03)
+    addFlash(state, potResult.x, potResult.y, 255, 220, 120, 100 * state.scale)
+    addBeautyBloom(state, potResult.x, potResult.y, 200)
+  } else if (potResult.type === 'player_defects') {
+    // Player defects, agent cooperates: player takes full pot
+    player.energy = Math.min(3.0, player.energy + potResult.potSize * 0.1)
+    addDust(state.starField, potResult.x, potResult.y, false, potResult.potSize * 0.3)
+    karma.beauty = Math.max(0, karma.beauty - 0.06)
+    karma.hostility = Math.min(1, karma.hostility + 0.04)
+    karma.corruption = Math.min(1, karma.corruption + 0.03)
+    addFlash(state, potResult.x, potResult.y, 60, 30, 80, 80 * state.scale)
+  } else if (potResult.type === 'agent_defects') {
+    // Agent defects, player cooperates: player loses energy
+    player.energy = Math.max(0, player.energy - potResult.potSize * 0.03)
+    addDust(state.starField, potResult.x, potResult.y, false, potResult.potSize * 0.3)
+    karma.trust = Math.max(0, karma.trust - 0.02)
+    addFlash(state, potResult.x, potResult.y, 80, 40, 100, 80 * state.scale)
+  } else if (potResult.type === 'both_defect') {
+    // Both defect: pot destroyed, both lose a bit
+    player.energy = Math.max(0, player.energy - potResult.potSize * 0.01)
+    addDust(state.starField, potResult.x, potResult.y, false, potResult.potSize * 0.3)
+    karma.hostility = Math.min(1, karma.hostility + 0.02)
+    karma.corruption = Math.min(1, karma.corruption + 0.02)
+    addFlash(state, potResult.x, potResult.y, 50, 30, 60, 70 * state.scale)
+  }
+
   rebuildConnectionLines(state)
   checkCooperatorClusters(state, dt)
   checkSpawning(state, dt, viewportWidth, viewportHeight)
@@ -896,6 +976,8 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   updateBeautyBlooms(state, dt)
   updateGroundScars(state, dt)
   updateSmoothKarma(state)
+  updateLeafHealth(state.tree, dt, karma.beauty)
+  updateStarField(state.starField, state.tree, karma, dt, state.time)
   updateFragments(state, dt)
   checkFragmentTriggers(state)
   periodicSave(state, dt)
@@ -1376,16 +1458,24 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
       }
       state.karma.beauty = Math.min(1, state.karma.beauty + 0.02)
 
-      // Chance of ascension
-      if (state.stars.length < 15 && nearby.length >= 3 && Math.random() < 0.25) {
+      // Emit golden dust from cooperator clusters — feeds the star cycle
+      addDust(state.starField, cx, cy, true, 5 + clusterSize * 2)
+
+      // Chance of ascension — cooperator becomes a star directly
+      const skyY = state.tree.originY - state.tree.height - 100
+      if (state.starField.stars.length < 12 && nearby.length >= 3 && Math.random() < 0.25) {
         state.worldEvents.starFormed = true
         const ascIdx = nearby[Math.floor(Math.random() * nearby.length)]
         const asc = entities[ascIdx]
-        state.stars.push({
+        state.starField.stars.push({
           x: asc.x,
-          y: Math.min(asc.y, s * 100 + Math.random() * s * 150),
-          brightness: 0.7 + Math.random() * 0.3,
+          y: Math.min(skyY, asc.y - 200 - Math.random() * 200),
+          brightness: 0.8,
+          life: 1.0,
           phase: Math.random() * Math.PI * 2,
+          birthTime: state.time,
+          lifespan: 30 + Math.random() * 30,
+          rainTimer: 0,
         })
         const col = ENTITY_COLORS.cooperator
         for (let p = 0; p < 8; p++) {
