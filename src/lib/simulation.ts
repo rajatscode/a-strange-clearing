@@ -61,6 +61,7 @@ export type GrassBlade = {
   phase: number
   luminous: boolean
   hue: number
+  deadZone: number
 }
 
 export type Ripple = {
@@ -303,8 +304,8 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
   const mobileScale = isSmallViewport ? 0.35 : isMobile ? 0.6 : 1
   const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const motionScale = reducedMotion ? 0.5 : 1
-  const grassCount = Math.min(400, Math.floor((180 + mood.grassDensity * 70) * Math.sqrt(worldRatio) * mobileScale))
-  const particleCount = Math.min(80, Math.floor((35 + mood.driftSpeed * 15) * Math.sqrt(worldRatio) * mobileScale * motionScale))
+  const grassCount = Math.min(250, Math.floor((180 + mood.grassDensity * 70) * Math.sqrt(worldRatio) * mobileScale))
+  const particleCount = Math.min(50, Math.floor((35 + mood.driftSpeed * 15) * Math.sqrt(worldRatio) * mobileScale * motionScale))
 
   const grass: GrassBlade[] = []
   for (let i = 0; i < grassCount; i++) {
@@ -319,6 +320,7 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
       phase: Math.random() * Math.PI * 2,
       luminous: Math.random() < 0.15,
       hue: Math.random() < 0.4 ? 165 + Math.random() * 35 : 95 + Math.random() * 35,
+      deadZone: 0,
     })
   }
   grass.sort((a, b) => a.baseHeight - b.baseHeight)
@@ -1398,10 +1400,19 @@ function addBeautyBloom(state: WorldState, x: number, y: number, maxR: number): 
 }
 
 function updateGrass(state: WorldState, _dt: number, _viewportHeight: number): void {
-  const { player, mood } = state
+  const { player, mood, entities } = state
   const s = state.scale
   const animSpeed = state.reducedMotion ? 0 : 1
   const windTime = state.time * (0.6 + mood.windStrength * 1.0)
+
+  // Cache corruptors once per frame for dead zone checks
+  const corruptors: Array<{x: number, y: number, corruption: number}> = []
+  for (let ci = 0; ci < entities.length; ci++) {
+    const ce = entities[ci]
+    if (ce.kind === 'corruptor' && ce.alive) corruptors.push(ce)
+  }
+  const dzRange = 120 * s
+  const dzRangeSq = dzRange * dzRange
 
   for (let i = 0; i < state.grass.length; i++) {
     const blade = state.grass[i]
@@ -1423,6 +1434,21 @@ function updateGrass(state: WorldState, _dt: number, _viewportHeight: number): v
 
     const targetBend = wind + playerBend + blade.lean
     blade.bend += (targetBend - blade.bend) * 0.12
+
+    // Dead zone: grass near corruptors turns gray/brown
+    let dz = 0
+    for (let ci = 0; ci < corruptors.length; ci++) {
+      const ce = corruptors[ci]
+      const cdx = blade.x - ce.x
+      if (Math.abs(cdx) > dzRange) continue
+      const cdy = (state.worldHeight - blade.baseHeight) - ce.y
+      if (Math.abs(cdy) > dzRange) continue
+      const cdistSq = cdx * cdx + cdy * cdy
+      if (cdistSq < dzRangeSq) {
+        dz = Math.max(dz, (1 - Math.sqrt(cdistSq) / dzRange) * ce.corruption)
+      }
+    }
+    blade.deadZone = dz
   }
 }
 

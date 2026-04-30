@@ -556,13 +556,6 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
 
   ctx.lineCap = 'round'
 
-  // Cache corruptors for dead zone checks (avoid filtering inside grass loop)
-  const corruptorCache: Array<{x: number, y: number, corruption: number}> = []
-  for (let ci = 0; ci < world.entities.length; ci++) {
-    const ce = world.entities[ci]
-    if (ce.kind === 'corruptor' && ce.alive) corruptorCache.push(ce)
-  }
-
   const h = world.worldHeight
   for (let i = 0; i < world.grass.length; i++) {
     const blade = world.grass[i]
@@ -577,21 +570,8 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
 
     const strokeW = 1.5 * s + effectiveHeight * 0.008
 
-    // Dead zone: grass near corruptors turns gray/brown (use squared distance, AABB early-out)
-    let deadZone = 0
-    const dzRange = 120 * s
-    const dzRangeSq = dzRange * dzRange
-    for (let ci = 0; ci < corruptorCache.length; ci++) {
-      const ce = corruptorCache[ci]
-      const cdx = blade.x - ce.x
-      if (Math.abs(cdx) > dzRange) continue
-      const cdy = tipY - ce.y
-      if (Math.abs(cdy) > dzRange) continue
-      const cdistSq = cdx * cdx + cdy * cdy
-      if (cdistSq < dzRangeSq) {
-        deadZone = Math.max(deadZone, (1 - Math.sqrt(cdistSq) / dzRange) * ce.corruption)
-      }
-    }
+    // Dead zone pre-computed in updateGrass (simulation.ts)
+    const deadZone = blade.deadZone
 
     // Gravitational shimmer: grass near hidden nav nodes glows warmer (use squared distance)
     let navGlow = 0
