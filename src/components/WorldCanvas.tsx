@@ -3,6 +3,9 @@ import type { WorldState, Entity } from '../lib/simulation'
 import { createWorld, updateWorld, addRipple, addFlash, findNavNodeAt, findFalseBeaconAt, triggerFalseBeaconTrap, handleWorldClick, ENTITY_COLORS } from '../lib/simulation'
 import { AudioEngine } from './AudioEngine'
 
+const MAX_DPR = 1.5
+function getDPR() { return Math.min(window.devicePixelRatio || 1, MAX_DPR) }
+
 export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (route: string) => void; muffled?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const worldRef = useRef<WorldState | null>(null)
@@ -35,7 +38,7 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     lastMouseRef.current.y = clientY
     lastMouseRef.current.time = now
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+    const dpr = getDPR()
     // Convert screen coordinates to world space
     world.player.targetX = clientX * dpr + world.camera.x
     world.player.targetY = clientY * dpr + world.camera.y
@@ -79,7 +82,7 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
       audioRef.current.start()
     }
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+    const dpr = getDPR()
 
     // Check mute button click
     const canvas = canvasRef.current
@@ -180,7 +183,7 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     }
 
     function resize() {
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+      const dpr = getDPR()
       canvas!.width = window.innerWidth * dpr
       canvas!.height = window.innerHeight * dpr
       canvas!.style.width = window.innerWidth + 'px'
@@ -1241,7 +1244,7 @@ function drawFragments(ctx: CanvasRenderingContext2D, world: WorldState, cam: Ca
 
 
 function drawMuteGlyph(ctx: CanvasRenderingContext2D, w: number, h: number, muted: boolean, hovering: boolean) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+  const dpr = getDPR()
   const cx = w - 36 * dpr
   const cy = h - 36 * dpr
   const r = 10 * dpr
