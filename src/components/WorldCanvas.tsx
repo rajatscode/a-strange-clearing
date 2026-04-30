@@ -375,31 +375,42 @@ function onScreen(x: number, y: number, cam: Camera, w: number, h: number, margi
 function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
   const { mood, smoothKarma: karma } = world
 
-  // Dramatic karma influence on background (uses smoothed values for gradual transition)
-  const beautyHue = karma.beauty > 0.6 ? (karma.beauty - 0.6) * 60 : karma.beauty * 12
-  const corruptHue = karma.corruption > 0.5 ? (karma.corruption - 0.5) * -40 : karma.corruption * -8
+  // EXTREME karma influence on background — whole world shifts color
+  // Beauty: warm living garden (hue toward green-gold, bright, saturated)
+  // Corruption: dying wasteland (hue toward brown-gray, dark, desaturated)
+  const beautyHue = karma.beauty > 0.3 ? (karma.beauty - 0.3) * 85 : karma.beauty * 15    // up to +60
+  const corruptHue = karma.corruption > 0.3 ? (karma.corruption - 0.3) * -85 : karma.corruption * -12  // down to -60
   const bShift = beautyHue + corruptHue
 
-  // Saturation: beauty boosts, corruption kills
-  const beautySat = karma.beauty > 0.6 ? (karma.beauty - 0.6) * 30 : 0
-  const corruptSat = karma.corruption > 0.5 ? (karma.corruption - 0.5) * -25 : 0
+  // Background hue oscillation (~2.5 min period) — world breathes
+  const hueOsc = Math.sin(world.time * 0.042) * 8 + Math.sin(world.time * 0.017) * 5
+
+  // Saturation: beauty boosts massively, corruption kills
+  const beautySat = karma.beauty > 0.3 ? (karma.beauty - 0.3) * 55 : 0     // up to +40
+  const corruptSat = karma.corruption > 0.3 ? (karma.corruption - 0.3) * -55 : 0  // down to -40
 
   // Lightness: beauty brightens, corruption darkens
-  const beautyLit = karma.beauty > 0.6 ? (karma.beauty - 0.6) * 12 : 0
-  const corruptLit = karma.corruption > 0.5 ? (karma.corruption - 0.5) * -6 : 0
+  const beautyLit = karma.beauty > 0.3 ? (karma.beauty - 0.3) * 22 : 0     // up to +15
+  const corruptLit = karma.corruption > 0.3 ? (karma.corruption - 0.3) * -22 : 0  // down to -15
+
+  // 3x mood influence on all visual parameters
+  const moodSat = mood.saturation * 45    // was *15
+  const moodBrt = mood.brightness * 12     // was *4
+  const moodSat2 = mood.saturation * 30   // was *10
+  const moodBrt2 = mood.brightness * 9    // was *3
 
   const bands = [
-    { y: 0,        frac: 0.35, hue: 225 + bShift, sat: 25 + mood.saturation * 15 + beautySat + corruptSat, lit: 4 + mood.brightness * 4 + beautyLit + corruptLit },
-    { y: h * 0.35, frac: 0.25, hue: 215 + bShift, sat: 20 + mood.saturation * 10 + beautySat + corruptSat, lit: 5 + mood.brightness * 3 + beautyLit + corruptLit },
-    { y: h * 0.6,  frac: 0.25, hue: 175 + bShift, sat: 22 + mood.saturation * 12 + beautySat + corruptSat, lit: 5 + mood.brightness * 3 + beautyLit + corruptLit },
-    { y: h * 0.85, frac: 0.15, hue: 150 + bShift, sat: 28 + mood.saturation * 10 + beautySat + corruptSat, lit: 4 + mood.brightness * 3 + beautyLit + corruptLit },
+    { y: 0,        frac: 0.35, hue: 225 + bShift + hueOsc, sat: 25 + moodSat + beautySat + corruptSat, lit: 4 + moodBrt + beautyLit + corruptLit },
+    { y: h * 0.35, frac: 0.25, hue: 215 + bShift + hueOsc, sat: 20 + moodSat2 + beautySat + corruptSat, lit: 5 + moodBrt2 + beautyLit + corruptLit },
+    { y: h * 0.6,  frac: 0.25, hue: 175 + bShift + hueOsc, sat: 22 + moodSat2 * 1.2 + beautySat + corruptSat, lit: 5 + moodBrt2 + beautyLit + corruptLit },
+    { y: h * 0.85, frac: 0.15, hue: 150 + bShift + hueOsc, sat: 28 + moodSat2 + beautySat + corruptSat, lit: 4 + moodBrt2 + beautyLit + corruptLit },
   ]
-  ctx.fillStyle = `hsl(${135 + bShift}, ${Math.max(5, 30 + mood.saturation * 8 + beautySat + corruptSat)}%, ${Math.max(1, 3 + mood.brightness * 2 + beautyLit + corruptLit)}%)`
+  ctx.fillStyle = `hsl(${135 + bShift + hueOsc}, ${Math.max(5, 30 + mood.saturation * 24 + beautySat + corruptSat)}%, ${Math.max(1, 3 + mood.brightness * 6 + beautyLit + corruptLit)}%)`
   ctx.fillRect(0, 0, w, h)
   // Overlay bands top-down
   for (let i = 0; i < bands.length; i++) {
     const b = bands[i]
-    ctx.fillStyle = `hsl(${b.hue}, ${b.sat}%, ${b.lit}%)`
+    ctx.fillStyle = `hsl(${b.hue}, ${Math.max(3, b.sat)}%, ${Math.max(1, b.lit)}%)`
     ctx.fillRect(0, b.y, w, h * b.frac + 2)
   }
 
@@ -412,9 +423,12 @@ function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: Wor
   // Beauty: warmer, golden/green tint, slightly thinner
   // Corruption: thicker, gray, sickly
   // Hostility: cold blue-purple tint
-  const corruptThicken = karma.corruption > 0.5 ? (karma.corruption - 0.5) * 0.12 : 0
-  const beautyThin = karma.beauty > 0.6 ? (karma.beauty - 0.6) * -0.04 : 0
-  const fogAlpha = 0.04 + mood.fogAmount * 0.06 + corruptThicken + beautyThin
+  // Extreme fog range: 0.02 (beautiful, thin mist) to 0.15 (corrupt, thick oppressive haze)
+  const corruptThicken = karma.corruption > 0.3 ? (karma.corruption - 0.3) * 0.18 : 0  // up to +0.13
+  const beautyThin = karma.beauty > 0.3 ? (karma.beauty - 0.3) * -0.06 : 0             // down to -0.04
+  // Fog density pulsing (~30s period)
+  const fogPulse = Math.sin(time * 0.21) * 0.015 + Math.sin(time * 0.09) * 0.008
+  const fogAlpha = 0.04 + mood.fogAmount * 0.18 + corruptThicken + beautyThin + fogPulse  // mood 3x (was *0.06)
 
   // Hue shifts: beauty = warm green (150-160), corruption = gray (100), hostility = cold blue-purple (240)
   const fogHue = karma.corruption > 0.5
@@ -464,11 +478,14 @@ const LAYER_ALPHA = [0.4, 0.6, 0.8]
 const LAYER_PARALLAX = [0.3, 0.7, 1.0]
 
 function drawAllParticles(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
-  const { smoothKarma: karma } = world
+  const { smoothKarma: karma, mood } = world
 
-  const beautyBright = karma.beauty > 0.6 ? 1.0 + (karma.beauty - 0.6) * 1.5 : 1.0
-  const corruptDim = karma.corruption > 0.5 ? 1.0 - (karma.corruption - 0.5) * 0.6 : 1.0
-  const brightMult = beautyBright * corruptDim
+  // Stronger karma brightness: beauty makes particles glow, corruption dims them heavily
+  const beautyBright = karma.beauty > 0.4 ? 1.0 + (karma.beauty - 0.4) * 2.5 : 1.0
+  const corruptDim = karma.corruption > 0.3 ? 1.0 - (karma.corruption - 0.3) * 0.8 : 1.0
+  // 3x mood influence on particle brightness
+  const moodBright = 1.0 + (mood.brightness - 0.5) * 0.6
+  const brightMult = beautyBright * corruptDim * moodBright
 
   const satMult = karma.corruption > 0.5
     ? 0.3 + (1 - karma.corruption) * 0.7
@@ -520,21 +537,26 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
   const corruptFactor = karma.corruption > 0.5 ? (karma.corruption - 0.5) / 0.5 : 0 // 0-1 for corruption > 0.5
   const hostileFactor = karma.hostility > 0.6 ? (karma.hostility - 0.6) / 0.4 : 0
 
-  // Luminous threshold: beauty 15%→40%, corruption 15%→5%
+  // Luminous threshold: beauty → 50% luminous, corruption → 3%
+  // Fluctuates with time so no two minutes look the same
+  const lumFlux = Math.sin(time * 0.08) * 0.05 + Math.sin(time * 0.035) * 0.03
   const luminousThreshold = karma.corruption > 0.5
-    ? 0.05 + (1 - corruptFactor) * 0.10
-    : 0.15 + beautyFactor * 0.25
+    ? 0.03 + (1 - corruptFactor) * 0.07 + lumFlux
+    : 0.15 + beautyFactor * 0.35 + lumFlux
 
-  // Base colors: beauty = vibrant green, corruption = gray-brown
+  // Base colors: EXTREME ranges
+  // beauty = vibrant warm green, corruption = gray-brown wasteland
   const baseHue = karma.corruption > 0.5
-    ? 80 + (1 - corruptFactor) * 55 // shifts toward brown/gray
-    : 135 + mood.hueBias * 0.05 + beautyFactor * 15 // warmer green
+    ? 70 + (1 - corruptFactor) * 55 // deep brown/gray
+    : 135 + mood.hueBias * 0.15 + beautyFactor * 20 // warmer green (3x mood)
+  // baseSat: 10 (corrupt) to 60 (beautiful)
   const baseSat = karma.corruption > 0.5
-    ? 10 + (1 - corruptFactor) * 25 // very desaturated
-    : 35 + karma.beauty * 25 + beautyFactor * 15 // more vivid
+    ? 10 + (1 - corruptFactor) * 15 // very desaturated wasteland
+    : 35 + karma.beauty * 25 + beautyFactor * 25 // vivid garden, up to 60
+  // baseLit: 8 (corrupt) to 35 (beautiful)
   const baseLit = karma.corruption > 0.5
-    ? 10 + (1 - corruptFactor) * 8 // dimmer
-    : 18 + karma.beauty * 14 + beautyFactor * 8 // brighter
+    ? 8 + (1 - corruptFactor) * 10 // dying darkness
+    : 18 + karma.beauty * 17 + beautyFactor * 12 // bright garden, up to 35
 
   // Height multiplier: beauty = taller, corruption = shorter
   const heightMult = 1.0 + beautyFactor * 0.3 - corruptFactor * 0.3
