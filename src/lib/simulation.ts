@@ -155,6 +155,17 @@ export type WorldState = {
   groundScars: GroundScar[]
   mood: CosmicMood
   karma: KarmaState
+  camera: { x: number; y: number }
+  worldWidth: number
+  worldHeight: number
+  worldEvents: {
+    entityDeath: boolean
+    beautyBloom: boolean
+    starFormed: boolean
+    transcendence: boolean
+    corruptionSpread: boolean
+    cleanseSuccess: boolean
+  }
   mouseSpeed: number
   mouseSmoothed: number
   time: number
@@ -248,12 +259,16 @@ function createNavNodes(width: number, height: number, karma: KarmaState): NavNo
   ]
 }
 
-export function createWorld(width: number, height: number): WorldState {
+export function createWorld(viewportWidth: number, viewportHeight: number): WorldState {
   const karma = loadKarma()
   const mood = getCosmicMood()
-  const scale = height / 800
+  const scale = viewportHeight / 800
 
-  const area = width * height
+  // World is larger than viewport
+  const worldWidth = viewportWidth * 3
+  const worldHeight = viewportHeight * 2
+
+  const area = worldWidth * worldHeight
   const densityScale = Math.min(1, area / (1920 * 1080 * 4))
   const isMobile = 'ontouchstart' in window || window.innerWidth < 768
   const mobileScale = isMobile ? 0.6 : 1
@@ -262,7 +277,7 @@ export function createWorld(width: number, height: number): WorldState {
 
   const grass: GrassBlade[] = []
   for (let i = 0; i < grassCount; i++) {
-    const x = (i / grassCount) * width + (Math.random() - 0.5) * (width / grassCount) * 1.5
+    const x = (i / grassCount) * worldWidth + (Math.random() - 0.5) * (worldWidth / grassCount) * 1.5
     const heightRand = Math.random()
     const baseHeight = (40 + heightRand * 120 + heightRand * heightRand * 160) * scale
     grass.push({
@@ -279,9 +294,9 @@ export function createWorld(width: number, height: number): WorldState {
 
   const particles: Particle[] = []
   for (let i = 0; i < particleCount; i++) {
-    const yBias = Math.random() < 0.3 ? height * 0.6 + Math.random() * height * 0.4 : Math.random() * height
+    const yBias = Math.random() < 0.3 ? worldHeight * 0.6 + Math.random() * worldHeight * 0.4 : Math.random() * worldHeight
     particles.push({
-      x: Math.random() * width,
+      x: Math.random() * worldWidth,
       y: yBias,
       vx: (Math.random() - 0.5) * 0.4,
       vy: (Math.random() - 0.5) * 0.25 - 0.15,
@@ -293,15 +308,19 @@ export function createWorld(width: number, height: number): WorldState {
     })
   }
 
-  const entities = spawnEntities(width, height, scale)
-  const navNodes = createNavNodes(width, height, karma)
+  const entities = spawnEntities(worldWidth, worldHeight, scale)
+  const navNodes = createNavNodes(worldWidth, worldHeight, karma)
+
+  // Player starts at center of world
+  const startX = worldWidth / 2
+  const startY = worldHeight / 2
 
   return {
     player: {
-      x: width / 2,
-      y: height / 2,
-      targetX: width / 2,
-      targetY: height / 2,
+      x: startX,
+      y: startY,
+      targetX: startX,
+      targetY: startY,
       energy: karma.playerEnergy,
       aura: 30 * scale,
       alive: karma.playerEnergy > 0,
@@ -328,6 +347,17 @@ export function createWorld(width: number, height: number): WorldState {
     groundScars: [],
     mood,
     karma,
+    camera: { x: startX - viewportWidth / 2, y: startY - viewportHeight / 2 },
+    worldWidth,
+    worldHeight,
+    worldEvents: {
+      entityDeath: false,
+      beautyBloom: false,
+      starFormed: false,
+      transcendence: false,
+      corruptionSpread: false,
+      cleanseSuccess: false,
+    },
     mouseSpeed: 0,
     mouseSmoothed: 0,
     time: 0,
@@ -454,6 +484,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
         karma.beauty = Math.min(1, karma.beauty + 0.04)
         karma.corruption = Math.max(0, karma.corruption - 0.03)
         karma.trust = Math.min(1, karma.trust + 0.02)
+        state.worldEvents.cleanseSuccess = true
 
         // Dramatic cleanse bloom
         addBeautyBloom(state, e.x, e.y, 120)
@@ -483,9 +514,40 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
   return { type: 'ripple' }
 }
 
-export function updateWorld(state: WorldState, dt: number, width: number, height: number): void {
+export function updateWorld(state: WorldState, dt: number, viewportWidth: number, viewportHeight: number): void {
   state.time += dt
-  const { player, karma } = state
+  const { player, karma, camera } = state
+
+  // Reset world events
+  state.worldEvents.entityDeath = false
+  state.worldEvents.beautyBloom = false
+  state.worldEvents.starFormed = false
+  state.worldEvents.transcendence = false
+  state.worldEvents.corruptionSpread = false
+  state.worldEvents.cleanseSuccess = false
+
+  // Update camera — follow player when near edge (20% threshold)
+  const edgeX = viewportWidth * 0.2
+  const edgeY = viewportHeight * 0.2
+  const playerScreenX = player.x - camera.x
+  const playerScreenY = player.y - camera.y
+
+  let targetCamX = camera.x
+  let targetCamY = camera.y
+
+  if (playerScreenX < edgeX) targetCamX = player.x - edgeX
+  else if (playerScreenX > viewportWidth - edgeX) targetCamX = player.x - (viewportWidth - edgeX)
+
+  if (playerScreenY < edgeY) targetCamY = player.y - edgeY
+  else if (playerScreenY > viewportHeight - edgeY) targetCamY = player.y - (viewportHeight - edgeY)
+
+  // Clamp camera to world bounds
+  targetCamX = Math.max(0, Math.min(state.worldWidth - viewportWidth, targetCamX))
+  targetCamY = Math.max(0, Math.min(state.worldHeight - viewportHeight, targetCamY))
+
+  // Smooth lerp
+  camera.x += (targetCamX - camera.x) * 0.08
+  camera.y += (targetCamY - camera.y) * 0.08
 
   if (Math.floor(state.time * 0.5) !== Math.floor((state.time - dt) * 0.5)) {
     Object.assign(state.mood, getCosmicMood())
@@ -507,12 +569,12 @@ export function updateWorld(state: WorldState, dt: number, width: number, height
     karma.beauty = Math.max(0, karma.beauty - dt * 0.003)
     karma.trust = Math.max(0, karma.trust - dt * 0.002)
 
-    updateEntities(state, dt, width, height)
+    updateEntities(state, dt, viewportWidth, viewportHeight)
     rebuildConnectionLines(state)
     checkCooperatorClusters(state, dt)
-    checkSpawning(state, dt, width, height)
-    updateGrass(state, dt, height)
-    updateParticles(state, dt, width, height)
+    checkSpawning(state, dt, viewportWidth, viewportHeight)
+    updateGrass(state, dt, viewportHeight)
+    updateParticles(state, dt, viewportWidth, viewportHeight)
     updateRipples(state, dt)
     updateFlashes(state, dt)
     updateDeathParticles(state, dt)
@@ -545,9 +607,9 @@ export function updateWorld(state: WorldState, dt: number, width: number, height
     player.aggression = Math.max(0, player.aggression - dt * 0.05)
   }
 
-  karma.beauty += (player.patience - 0.5) * dt * 0.005
-  karma.trust += (player.stillness - player.aggression) * dt * 0.003
-  karma.hostility += (player.aggression - 0.3) * dt * 0.004
+  karma.beauty += (player.patience - 0.5) * dt * 0.018
+  karma.trust += (player.stillness - player.aggression) * dt * 0.012
+  karma.hostility += (player.aggression - 0.3) * dt * 0.015
   karma.navigability = Math.max(0, Math.min(1,
     karma.beauty * 0.3 + karma.trust * 0.3 - karma.hostility * 0.2 - karma.corruption * 0.2 + 0.3
   ))
@@ -559,7 +621,7 @@ export function updateWorld(state: WorldState, dt: number, width: number, height
   karma.corruption = Math.max(0, Math.min(1, karma.corruption))
   karma.patience = player.patience
 
-  karma.hostility = Math.max(0, karma.hostility - dt * 0.001 * player.patience)
+  karma.hostility = Math.max(0, karma.hostility - dt * 0.004 * player.patience)
 
   if (player.stillness > 0.6) {
     player.energy = Math.min(1, player.energy + dt * 0.003)
@@ -617,13 +679,13 @@ export function updateWorld(state: WorldState, dt: number, width: number, height
 
   updateNavNodes(state, dt)
   updateEntityHoverInteractions(state, dt)
-  updateEntities(state, dt, width, height)
+  updateEntities(state, dt, viewportWidth, viewportHeight)
   rebuildConnectionLines(state)
   checkCooperatorClusters(state, dt)
-  checkSpawning(state, dt, width, height)
+  checkSpawning(state, dt, viewportWidth, viewportHeight)
   checkTranscendence(state, dt)
-  updateGrass(state, dt, height)
-  updateParticles(state, dt, width, height)
+  updateGrass(state, dt, viewportHeight)
+  updateParticles(state, dt, viewportWidth, viewportHeight)
   updateRipples(state, dt)
   updateFlashes(state, dt)
   updateDeathParticles(state, dt)
@@ -713,9 +775,10 @@ function updateEntityHoverInteractions(state: WorldState, dt: number): void {
 function killEntity(state: WorldState, e: Entity): void {
   if (!e.alive) return
   e.alive = false
+  state.worldEvents.entityDeath = true
 
   const col = ENTITY_COLORS[e.kind]
-  const count = Math.min(12, 30 - state.deathParticles.length)
+  const count = Math.min(12, 20 - state.deathParticles.length)
 
   for (let j = 0; j < count; j++) {
     const angle = (j / count) * Math.PI * 2 + Math.random() * 0.3
@@ -730,7 +793,7 @@ function killEntity(state: WorldState, e: Entity): void {
     })
   }
 
-  if (state.groundScars.length < 20) {
+  if (state.groundScars.length < 15) {
     state.groundScars.push({
       x: e.x, y: e.y,
       alpha: 0.6,
@@ -742,7 +805,7 @@ function killEntity(state: WorldState, e: Entity): void {
   addFlash(state, e.x, e.y, col.r, col.g, col.b, 40)
 }
 
-function updateEntities(state: WorldState, dt: number, width: number, height: number): void {
+function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _viewportHeight: number): void {
   const { player, mood, karma } = state
   const s = state.scale
   const time = state.time
@@ -837,6 +900,7 @@ function updateEntities(state: WorldState, dt: number, width: number, height: nu
           if (odist < 100 * s) {
             other.corruption = Math.min(1, other.corruption + dt * 0.01 * e.corruption)
             other.beauty = Math.max(0, other.beauty - dt * 0.005)
+            state.worldEvents.corruptionSpread = true
           }
         }
       }
@@ -860,9 +924,9 @@ function updateEntities(state: WorldState, dt: number, width: number, height: nu
 
     const margin = 50 * s
     if (e.x < margin) e.vx += dt * 2
-    if (e.x > width - margin) e.vx -= dt * 2
+    if (e.x > state.worldWidth - margin) e.vx -= dt * 2
     if (e.y < margin) e.vy += dt * 2
-    if (e.y > height - margin) e.vy -= dt * 2
+    if (e.y > state.worldHeight - margin) e.vy -= dt * 2
 
     if (e.kind === 'fragile') {
       e.energy = Math.max(0, e.energy - dt * 0.003)
@@ -1000,7 +1064,8 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
       state.karma.beauty = Math.min(1, state.karma.beauty + 0.02)
 
       // Chance of ascension
-      if (state.stars.length < 20 && Math.random() < 0.15) {
+      if (state.stars.length < 15 && Math.random() < 0.15) {
+        state.worldEvents.starFormed = true
         const ascIdx = nearby[Math.floor(Math.random() * nearby.length)]
         const asc = entities[ascIdx]
         state.stars.push({
@@ -1012,7 +1077,7 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
         const col = ENTITY_COLORS.cooperator
         for (let p = 0; p < 8; p++) {
           const angle = (p / 8) * Math.PI * 2
-          if (state.deathParticles.length < 30) {
+          if (state.deathParticles.length < 20) {
             state.deathParticles.push({
               x: asc.x, y: asc.y,
               vx: Math.cos(angle) * 1.5 * s,
@@ -1025,7 +1090,7 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
         }
         asc.alive = false
 
-        if (state.groundScars.length < 20) {
+        if (state.groundScars.length < 15) {
           state.groundScars.push({
             x: asc.x, y: asc.y,
             alpha: 0.5, radius: 15 * s, dark: false,
@@ -1038,7 +1103,7 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
   }
 }
 
-function checkSpawning(state: WorldState, dt: number, width: number, height: number): void {
+function checkSpawning(state: WorldState, dt: number, _viewportWidth: number, _viewportHeight: number): void {
   const interval = 8
   if (state.time - state.lastSpawnTime < interval) return
   if (Math.floor(state.time / interval) === Math.floor((state.time - dt) / interval)) return
@@ -1093,8 +1158,8 @@ function checkSpawning(state: WorldState, dt: number, width: number, height: num
     state.entities.push({
       id: `wanderer-spawn-${state.entityIdCounter++}`,
       kind: 'wanderer',
-      x: Math.random() * width * 0.8 + width * 0.1,
-      y: Math.random() * height * 0.6 + height * 0.2,
+      x: Math.random() * state.worldWidth * 0.8 + state.worldWidth * 0.1,
+      y: Math.random() * state.worldHeight * 0.6 + state.worldHeight * 0.2,
       vx: (Math.random() - 0.5) * 0.4,
       vy: (Math.random() - 0.5) * 0.3,
       radius: 6 * s,
@@ -1132,6 +1197,7 @@ function checkTranscendence(state: WorldState, dt: number): void {
     if (state.transcendenceTimer >= 30) {
       state.transcendenceActive = true
       state.transcendenceTimer = 4
+      state.worldEvents.transcendence = true
       addBeautyBloom(state, player.x, player.y, 250)
       addFlash(state, player.x, player.y, 200, 240, 255, 150)
     }
@@ -1140,15 +1206,15 @@ function checkTranscendence(state: WorldState, dt: number): void {
   }
 }
 
-function updateDeathParticles(state: WorldState, dt: number): void {
+function updateDeathParticles(state: WorldState, _dt: number): void {
   for (let i = state.deathParticles.length - 1; i >= 0; i--) {
     const p = state.deathParticles[i]
     p.x += p.vx
     p.y += p.vy
     p.vx *= 0.96
     p.vy *= 0.96
-    p.alpha -= dt * 1.5
-    if (p.alpha <= 0) {
+    p.alpha *= 0.90
+    if (p.alpha < 0.02) {
       state.deathParticles.splice(i, 1)
     }
   }
@@ -1165,17 +1231,19 @@ function updateBeautyBlooms(state: WorldState, dt: number): void {
   }
 }
 
-function updateGroundScars(state: WorldState, dt: number): void {
+function updateGroundScars(state: WorldState, _dt: number): void {
   for (let i = state.groundScars.length - 1; i >= 0; i--) {
     const scar = state.groundScars[i]
-    scar.alpha -= dt * 0.01
-    if (scar.alpha <= 0) {
+    scar.alpha *= 0.995
+    if (scar.alpha < 0.02) {
       state.groundScars.splice(i, 1)
     }
   }
 }
 
 function addBeautyBloom(state: WorldState, x: number, y: number, maxR: number): void {
+  if (state.beautyBlooms.length >= 5) return
+  state.worldEvents.beautyBloom = true
   state.beautyBlooms.push({
     x, y,
     radius: 5 * state.scale,
@@ -1185,7 +1253,7 @@ function addBeautyBloom(state: WorldState, x: number, y: number, maxR: number): 
   })
 }
 
-function updateGrass(state: WorldState, _dt: number, height: number): void {
+function updateGrass(state: WorldState, _dt: number, _viewportHeight: number): void {
   const { player, mood } = state
   const s = state.scale
   const windTime = state.time * (0.6 + mood.windStrength * 1.0)
@@ -1198,7 +1266,7 @@ function updateGrass(state: WorldState, _dt: number, height: number): void {
     const wind = wind1 + wind2 + wind3
 
     const dx = blade.x - player.x
-    const dy = (height - blade.baseHeight * 0.5) - player.y
+    const dy = (state.worldHeight - blade.baseHeight * 0.5) - player.y
     const dist = Math.sqrt(dx * dx + dy * dy)
     const bendRadius = 150 * s
 
@@ -1213,9 +1281,11 @@ function updateGrass(state: WorldState, _dt: number, height: number): void {
   }
 }
 
-function updateParticles(state: WorldState, _dt: number, width: number, height: number): void {
+function updateParticles(state: WorldState, _dt: number, _viewportWidth: number, _viewportHeight: number): void {
   const { player, mood } = state
   const s = state.scale
+  const ww = state.worldWidth
+  const wh = state.worldHeight
 
   for (let i = 0; i < state.particles.length; i++) {
     const p = state.particles[i]
@@ -1234,10 +1304,10 @@ function updateParticles(state: WorldState, _dt: number, width: number, height: 
 
     p.brightness = 0.2 + Math.sin(state.time + p.phase) * 0.15 + 0.15
 
-    if (p.x < -20) p.x = width + 20
-    if (p.x > width + 20) p.x = -20
-    if (p.y < -20) p.y = height + 20
-    if (p.y > height + 20) p.y = -20
+    if (p.x < -20) p.x = ww + 20
+    if (p.x > ww + 20) p.x = -20
+    if (p.y < -20) p.y = wh + 20
+    if (p.y > wh + 20) p.y = -20
   }
 }
 

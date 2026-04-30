@@ -35,8 +35,9 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     lastMouseRef.current.time = now
 
     const dpr = window.devicePixelRatio || 1
-    world.player.targetX = clientX * dpr
-    world.player.targetY = clientY * dpr
+    // Convert screen coordinates to world space
+    world.player.targetX = clientX * dpr + world.camera.x
+    world.player.targetY = clientY * dpr + world.camera.y
 
     // Check mute button hover
     const canvas = canvasRef.current
@@ -82,8 +83,9 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
       }
     }
 
-    const cx = clientX * dpr
-    const cy = clientY * dpr
+    // Convert screen coordinates to world space
+    const cx = clientX * dpr + world.camera.x
+    const cy = clientY * dpr + world.camera.y
 
     // Check nav node click
     const navNode = findNavNodeAt(world, cx, cy)
@@ -205,6 +207,12 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
             isHovering: false,
             clickEvent: clickedThisFrame.current,
             cleansing: false,
+            entityDeath: world.worldEvents.entityDeath,
+            beautyBloom: world.worldEvents.beautyBloom,
+            starFormed: world.worldEvents.starFormed,
+            transcendence: world.worldEvents.transcendence,
+            corruptionSpread: world.worldEvents.corruptionSpread,
+            cleanseSuccess: world.worldEvents.cleanseSuccess,
           })
           clickedThisFrame.current = false
         }
@@ -251,50 +259,79 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
 
 function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: number) {
   const isDead = !world.player.alive
+  const cam = world.camera
 
+  // Background and fog are drawn in screen space (no camera offset)
   drawBackground(ctx, w, h, world)
-  drawStars(ctx, world)
-  drawFog(ctx, w, h, world)
-  drawGroundScars(ctx, world)
-  drawParticlesForLayer(ctx, world, 0)
-  drawConnectionLines(ctx, world)
-  drawParticlesForLayer(ctx, world, 1)
-  drawGrass(ctx, world, h)
-  drawEntities(ctx, world)
-  drawDeathParticles(ctx, world)
-  drawBeautyBlooms(ctx, world)
-  drawParticlesForLayer(ctx, world, 2)
-  drawNavNodes(ctx, world)
-  drawRipples(ctx, world, world.scale)
-  drawFlashes(ctx, world, world.scale)
+
+  // Apply camera transform for all world-space drawing
+  ctx.save()
+  ctx.translate(-cam.x, -cam.y)
+
+  drawStars(ctx, world, cam, w, h)
+  drawFog(ctx, w, h, world, cam)
+  drawGroundScars(ctx, world, cam, w, h)
+  drawParticlesForLayer(ctx, world, 0, cam, w, h)
+  drawConnectionLines(ctx, world, w, h, cam)
+  drawParticlesForLayer(ctx, world, 1, cam, w, h)
+  drawGrass(ctx, world, h, cam, w)
+  drawEntities(ctx, world, cam, w, h)
+  drawDeathParticles(ctx, world, cam, w, h)
+  drawBeautyBlooms(ctx, world, cam, w, h)
+  drawParticlesForLayer(ctx, world, 2, cam, w, h)
+  drawNavNodes(ctx, world, cam, w, h)
+  drawRipples(ctx, world, world.scale, cam, w, h)
+  drawFlashes(ctx, world, world.scale, cam, w, h)
 
   if (isDead) {
-    // Desaturation overlay when dead
-    ctx.fillStyle = 'rgba(10, 12, 15, 0.35)'
-    ctx.fillRect(0, 0, w, h)
     drawEmber(ctx, world)
   } else {
     drawPlayerTrail(ctx, world.player, world.scale)
     drawPlayer(ctx, world.player, world.time, world.scale)
   }
 
+  ctx.restore()
+
+  // UI overlays in screen space
+  if (isDead) {
+    ctx.fillStyle = 'rgba(10, 12, 15, 0.35)'
+    ctx.fillRect(0, 0, w, h)
+  }
+
   drawKarmaOverlay(ctx, w, h, world)
+}
+
+type Camera = { x: number; y: number }
+
+function onScreen(x: number, y: number, cam: Camera, w: number, h: number, margin: number = 100): boolean {
+  return x >= cam.x - margin && x <= cam.x + w + margin && y >= cam.y - margin && y <= cam.y + h + margin
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
   const { mood, karma } = world
-  const bShift = karma.beauty * 12
-  const cShift = karma.corruption * -8
 
-  // Layered horizontal bands instead of a linear gradient
+  // Dramatic karma influence on background
+  // Beauty: warm green-blue, brighter — like a clearing at dusk with bioluminescent life
+  // Corruption: sickly gray-green, desaturated, darker — like a dying swamp
+  const beautyHue = karma.beauty > 0.6 ? (karma.beauty - 0.6) * 60 : karma.beauty * 12 // up to +24 hue shift
+  const corruptHue = karma.corruption > 0.5 ? (karma.corruption - 0.5) * -40 : karma.corruption * -8
+  const bShift = beautyHue + corruptHue
+
+  // Saturation: beauty boosts, corruption kills
+  const beautySat = karma.beauty > 0.6 ? (karma.beauty - 0.6) * 30 : 0
+  const corruptSat = karma.corruption > 0.5 ? (karma.corruption - 0.5) * -25 : 0
+
+  // Lightness: beauty brightens, corruption darkens
+  const beautyLit = karma.beauty > 0.6 ? (karma.beauty - 0.6) * 12 : 0
+  const corruptLit = karma.corruption > 0.5 ? (karma.corruption - 0.5) * -6 : 0
+
   const bands = [
-    { y: 0,        frac: 0.35, hue: 225 + bShift + cShift, sat: 25 + mood.saturation * 15, lit: 4 + mood.brightness * 4 },
-    { y: h * 0.35, frac: 0.25, hue: 215 + bShift,          sat: 20 + mood.saturation * 10, lit: 5 + mood.brightness * 3 },
-    { y: h * 0.6,  frac: 0.25, hue: 175 + bShift + cShift, sat: 22 + mood.saturation * 12, lit: 5 + mood.brightness * 3 },
-    { y: h * 0.85, frac: 0.15, hue: 150 + bShift,          sat: 28 + mood.saturation * 10, lit: 4 + mood.brightness * 3 },
+    { y: 0,        frac: 0.35, hue: 225 + bShift, sat: 25 + mood.saturation * 15 + beautySat + corruptSat, lit: 4 + mood.brightness * 4 + beautyLit + corruptLit },
+    { y: h * 0.35, frac: 0.25, hue: 215 + bShift, sat: 20 + mood.saturation * 10 + beautySat + corruptSat, lit: 5 + mood.brightness * 3 + beautyLit + corruptLit },
+    { y: h * 0.6,  frac: 0.25, hue: 175 + bShift, sat: 22 + mood.saturation * 12 + beautySat + corruptSat, lit: 5 + mood.brightness * 3 + beautyLit + corruptLit },
+    { y: h * 0.85, frac: 0.15, hue: 150 + bShift, sat: 28 + mood.saturation * 10 + beautySat + corruptSat, lit: 4 + mood.brightness * 3 + beautyLit + corruptLit },
   ]
-  // Fill bottom color first as base
-  ctx.fillStyle = `hsl(${135 + bShift}, ${30 + mood.saturation * 8}%, ${3 + mood.brightness * 2}%)`
+  ctx.fillStyle = `hsl(${135 + bShift}, ${Math.max(5, 30 + mood.saturation * 8 + beautySat + corruptSat)}%, ${Math.max(1, 3 + mood.brightness * 2 + beautyLit + corruptLit)}%)`
   ctx.fillRect(0, 0, w, h)
   // Overlay bands top-down
   for (let i = 0; i < bands.length; i++) {
@@ -312,28 +349,32 @@ function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, wor
   }
 }
 
-function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
+function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState, cam: Camera) {
   const { mood, time } = world
   const fogAlpha = 0.04 + mood.fogAmount * 0.06
 
-  // Horizon fog — simple semi-transparent rect at horizon band
-  const horizonY = h * 0.45
+  // Fog is drawn relative to camera viewport in world space
+  const cx = cam.x
+  const cy = cam.y
+
+  // Horizon fog
+  const horizonY = cy + h * 0.45
   const horizonH = h * 0.3
   ctx.fillStyle = `hsla(175, 25%, 25%, ${fogAlpha * 1.8})`
-  ctx.fillRect(0, horizonY, w, horizonH)
+  ctx.fillRect(cx, horizonY, w, horizonH)
   ctx.fillStyle = `hsla(190, 20%, 18%, ${fogAlpha * 0.8})`
-  ctx.fillRect(0, horizonY - h * 0.1, w, horizonH + h * 0.2)
+  ctx.fillRect(cx, horizonY - h * 0.1, w, horizonH + h * 0.2)
 
-  // Ground glow — simple rect fills
+  // Ground glow
   ctx.fillStyle = `hsla(160, 30%, 10%, ${fogAlpha * 1.2})`
-  ctx.fillRect(0, h * 0.8, w, h * 0.2)
+  ctx.fillRect(cx, cy + h * 0.8, w, h * 0.2)
   ctx.fillStyle = `hsla(150, 25%, 8%, ${fogAlpha * 1.5})`
-  ctx.fillRect(0, h * 0.9, w, h * 0.1)
+  ctx.fillRect(cx, cy + h * 0.9, w, h * 0.1)
 
-  // Drifting mist patches — simple alpha rects, 2 patches
+  // Drifting mist patches
   for (let i = 0; i < 2; i++) {
-    const mx = w * (0.1 + i * 0.4) + Math.sin(time * 0.04 + i * 1.7) * w * 0.12
-    const my = h * (0.3 + i * 0.15) + Math.cos(time * 0.025 + i * 2.3) * h * 0.05
+    const mx = cx + w * (0.1 + i * 0.4) + Math.sin(time * 0.04 + i * 1.7) * w * 0.12
+    const my = cy + h * (0.3 + i * 0.15) + Math.cos(time * 0.025 + i * 2.3) * h * 0.05
     const mw = w * 0.4
     const mh = h * 0.15
     ctx.fillStyle = `hsla(${165 + i * 15}, 20%, 22%, ${fogAlpha * 0.7})`
@@ -341,13 +382,14 @@ function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: Wor
   }
 }
 
-function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState, layer: number) {
+function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState, layer: number, cam: Camera, w: number, h: number) {
   const layerScale = layer === 0 ? 0.6 : layer === 1 ? 1.0 : 1.5
   const alphaBase = layer === 0 ? 0.4 : layer === 1 ? 0.6 : 0.8
 
   for (let i = 0; i < world.particles.length; i++) {
     const p = world.particles[i]
     if (p.layer !== layer) continue
+    if (!onScreen(p.x, p.y, cam, w, h)) continue
 
     const r = p.radius * layerScale
     const alpha = p.brightness * alphaBase
@@ -367,7 +409,7 @@ function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState,
   }
 }
 
-function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number) {
+function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number, cam: Camera, vpW: number) {
   const { mood, karma, time } = world
   const s = world.scale
 
@@ -377,9 +419,11 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number)
 
   ctx.lineCap = 'round'
 
-  const h = world.scale * 800
+  const h = world.worldHeight
   for (let i = 0; i < world.grass.length; i++) {
     const blade = world.grass[i]
+    // Cull grass outside viewport horizontally
+    if (blade.x < cam.x - 50 || blade.x > cam.x + vpW + 50) continue
     const baseY = h
     const bendOffset = blade.bend * blade.baseHeight * 0.5
     const tipX = blade.x + bendOffset
@@ -421,12 +465,13 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number)
   }
 }
 
-function drawRipples(ctx: CanvasRenderingContext2D, world: WorldState, scale: number) {
+function drawRipples(ctx: CanvasRenderingContext2D, world: WorldState, scale: number, cam: Camera, w: number, h: number) {
   const hue = 175 + world.karma.beauty * 25
 
   for (let i = 0; i < world.ripples.length; i++) {
     const r = world.ripples[i]
     if (r.alpha < 0.02) continue
+    if (!onScreen(r.x, r.y, cam, w, h, r.radius + 100)) continue
 
     // Outer ring
     ctx.beginPath()
@@ -452,10 +497,11 @@ function drawRipples(ctx: CanvasRenderingContext2D, world: WorldState, scale: nu
   }
 }
 
-function drawFlashes(ctx: CanvasRenderingContext2D, world: WorldState, scale: number) {
+function drawFlashes(ctx: CanvasRenderingContext2D, world: WorldState, scale: number, cam: Camera, w: number, h: number) {
   for (let i = 0; i < world.flashes.length; i++) {
     const f = world.flashes[i]
     if (f.alpha < 0.03) continue
+    if (!onScreen(f.x, f.y, cam, w, h, f.radius + 100)) continue
 
     // Outer glow
     ctx.beginPath()
@@ -546,11 +592,12 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'],
 
 // ---- Nav Nodes ----
 
-function drawNavNodes(ctx: CanvasRenderingContext2D, world: WorldState) {
+function drawNavNodes(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
   const { navNodes, time, scale: s } = world
   for (let i = 0; i < navNodes.length; i++) {
     const n = navNodes[i]
     if (n.revealed < 0.05) continue
+    if (!onScreen(n.x, n.y, cam, w, h, 200)) continue
     const a = n.revealed < 0.3 ? n.revealed / 0.3 * 0.15 : n.revealed < 0.7 ? 0.15 + (n.revealed - 0.3) / 0.4 * 0.35 : 0.5 + (n.revealed - 0.7) / 0.3 * 0.5
     const p = n.revealed >= 0.95 ? 1 + Math.sin(time * 2.5 + n.phase) * 0.15 : 1
     if (n.kind === 'note') { _drawNote(ctx, n.x, n.y, n.revealed, a, p, time, n.phase, s) }
@@ -604,13 +651,14 @@ function _drawBio(ctx: CanvasRenderingContext2D, x: number, y: number, rev: numb
 
 // ---- Entity Drawing ----
 
-function drawEntities(ctx: CanvasRenderingContext2D, world: WorldState) {
+function drawEntities(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
   const { entities, time, scale, karma } = world
   const trustBoost = karma.trust * 0.3
 
   for (let i = 0; i < entities.length; i++) {
     const e = entities[i]
     if (!e.alive) continue
+    if (!onScreen(e.x, e.y, cam, w, h, e.radius * 6)) continue
 
     const col = ENTITY_COLORS[e.kind]
     const pulse = Math.sin(time * 2 + e.phase) * 0.15 + 1
@@ -837,9 +885,10 @@ function drawKarmaOverlay(ctx: CanvasRenderingContext2D, w: number, h: number, w
   }
 }
 
-function drawStars(ctx: CanvasRenderingContext2D, world: WorldState) {
+function drawStars(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
   for (let i = 0; i < world.stars.length; i++) {
     const star = world.stars[i]
+    if (!onScreen(star.x, star.y, cam, w, h)) continue
     const twinkle = 0.5 + Math.sin(world.time * 3 + star.phase) * 0.3 + Math.sin(world.time * 7 + star.phase * 2.3) * 0.2
     const alpha = star.brightness * twinkle
     const r = (1.5 + star.brightness * 1.5) * world.scale
@@ -858,10 +907,11 @@ function drawStars(ctx: CanvasRenderingContext2D, world: WorldState) {
   }
 }
 
-function drawDeathParticles(ctx: CanvasRenderingContext2D, world: WorldState) {
+function drawDeathParticles(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
   for (let i = 0; i < world.deathParticles.length; i++) {
     const p = world.deathParticles[i]
     if (p.alpha < 0.02) continue
+    if (!onScreen(p.x, p.y, cam, w, h)) continue
     ctx.beginPath()
     ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2)
     ctx.fillStyle = `rgba(${p.r}, ${p.g}, ${p.b}, ${p.alpha})`
@@ -869,10 +919,11 @@ function drawDeathParticles(ctx: CanvasRenderingContext2D, world: WorldState) {
   }
 }
 
-function drawBeautyBlooms(ctx: CanvasRenderingContext2D, world: WorldState) {
+function drawBeautyBlooms(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
   for (let i = 0; i < world.beautyBlooms.length; i++) {
     const b = world.beautyBlooms[i]
     if (b.alpha < 0.02) continue
+    if (!onScreen(b.x, b.y, cam, w, h, b.radius + 100)) continue
 
     // Outer ring
     ctx.beginPath()
@@ -889,7 +940,7 @@ function drawBeautyBlooms(ctx: CanvasRenderingContext2D, world: WorldState) {
   }
 }
 
-function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState) {
+function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: number, cam: Camera) {
   const colors: Record<string, string> = {
     cooperate: '160, 70%, 60%',
     hunt: '20, 70%, 55%',
@@ -900,6 +951,8 @@ function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState) {
   for (let i = 0; i < world.connectionLines.length; i++) {
     const line = world.connectionLines[i]
     if (line.alpha < 0.02) continue
+    // Only draw if both endpoints are on screen
+    if (!onScreen(line.x1, line.y1, cam, w, h) || !onScreen(line.x2, line.y2, cam, w, h)) continue
     ctx.beginPath()
     ctx.moveTo(line.x1, line.y1)
     ctx.lineTo(line.x2, line.y2)
@@ -909,10 +962,11 @@ function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState) {
   }
 }
 
-function drawGroundScars(ctx: CanvasRenderingContext2D, world: WorldState) {
+function drawGroundScars(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
   for (let i = 0; i < world.groundScars.length; i++) {
     const scar = world.groundScars[i]
     if (scar.alpha < 0.02) continue
+    if (!onScreen(scar.x, scar.y, cam, w, h, scar.radius + 50)) continue
     ctx.beginPath()
     ctx.arc(scar.x, scar.y, scar.radius, 0, Math.PI * 2)
     if (scar.dark) {
