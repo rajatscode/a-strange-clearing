@@ -159,6 +159,7 @@ export type WorldState = {
   ripples: Ripple[]
   flashes: Flash[]
   navNodes: NavNode[]
+  falseBeacons: Array<{ x: number; y: number; revealed: number; phase: number; alive: boolean }>
   stars: Star[]
   deathParticles: DeathParticle[]
   beautyBlooms: BeautyBloom[]
@@ -370,6 +371,7 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
     ripples: [],
     flashes: [],
     navNodes,
+    falseBeacons: [],
     stars: [],
     deathParticles: [],
     beautyBlooms: [],
@@ -435,7 +437,7 @@ export function findEntityAt(state: WorldState, x: number, y: number): number {
 }
 
 export type ClickResult = {
-  type: 'none' | 'fragile_nourish' | 'cooperator_exchange' | 'defector_risk' | 'corruptor_cleanse_success' | 'corruptor_cleanse_fail' | 'ember_revive' | 'ripple'
+  type: 'none' | 'fragile_nourish' | 'cooperator_exchange' | 'defector_risk' | 'corruptor_cleanse_success' | 'corruptor_cleanse_fail' | 'ember_revive' | 'ripple' | 'false_beacon_trap'
   entityIndex?: number
 }
 
@@ -734,6 +736,7 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   }
 
   updateNavNodes(state, dt)
+  updateFalseBeacons(state, dt)
   updateEntityHoverInteractions(state, dt)
   updateEntities(state, dt, viewportWidth, viewportHeight)
   rebuildConnectionLines(state)
@@ -785,6 +788,66 @@ function updateNavNodes(state: WorldState, dt: number): void {
       node.revealed = Math.max(0, node.revealed - dt * 0.08)
     }
   }
+}
+
+function updateFalseBeacons(state: WorldState, dt: number): void {
+  const { player, karma } = state
+  const s = state.scale
+
+  // Spawn false beacons when corruption is high enough
+  if (karma.corruption > 0.3 && state.falseBeacons.length === 0 && state.time > 10) {
+    const count = karma.corruption > 0.6 ? 2 : 1
+    for (let i = 0; i < count; i++) {
+      let bx: number, by: number, tooClose: boolean
+      let attempts = 0
+      do {
+        bx = state.worldWidth * (0.2 + Math.random() * 0.6)
+        by = state.worldHeight * (0.3 + Math.random() * 0.4)
+        tooClose = state.navNodes.some(n => Math.sqrt((n.x - bx) ** 2 + (n.y - by) ** 2) < 300 * s)
+        attempts++
+      } while (tooClose && attempts < 20)
+      state.falseBeacons.push({ x: bx, y: by, revealed: 0, phase: Math.random() * Math.PI * 2, alive: true })
+    }
+  }
+
+  // Reveal/fade like nav nodes
+  const revealRadius = (80 + karma.navigability * 40) * s
+  for (let i = 0; i < state.falseBeacons.length; i++) {
+    const fb = state.falseBeacons[i]
+    if (!fb.alive) continue
+    const dx = fb.x - player.x
+    const dy = fb.y - player.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    if (dist < revealRadius && player.aggression < 0.5) {
+      const proximity = 1 - dist / revealRadius
+      const revealRate = (0.15 + player.patience * 0.25 + player.stillness * 0.2) * proximity
+      fb.revealed = Math.min(1, fb.revealed + dt * revealRate)
+    } else if (dist < 200 * s) {
+      fb.revealed = Math.max(0, fb.revealed - dt * 0.03)
+    } else {
+      fb.revealed = Math.max(0, fb.revealed - dt * 0.08)
+    }
+  }
+}
+
+export function findFalseBeaconAt(state: WorldState, x: number, y: number): number {
+  const hitRadius = 35 * state.scale
+  for (let i = 0; i < state.falseBeacons.length; i++) {
+    const fb = state.falseBeacons[i]
+    if (!fb.alive || fb.revealed < 0.95) continue
+    const dx = fb.x - x
+    const dy = fb.y - y
+    if (Math.sqrt(dx * dx + dy * dy) < hitRadius) return i
+  }
+  return -1
+}
+
+export function triggerFalseBeaconTrap(state: WorldState, index: number): void {
+  const fb = state.falseBeacons[index]
+  fb.alive = false
+  state.player.energy = Math.max(0, state.player.energy - 0.2)
+  state.karma.corruption = Math.min(1, state.karma.corruption + 0.05)
+  addFlash(state, fb.x, fb.y, 90, 130, 60, 120 * state.scale)
 }
 
 export function findNavNodeAt(state: WorldState, x: number, y: number): NavNode | null {

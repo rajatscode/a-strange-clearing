@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import type { WorldState, Entity } from '../lib/simulation'
-import { createWorld, updateWorld, addRipple, addFlash, findNavNodeAt, handleWorldClick, ENTITY_COLORS } from '../lib/simulation'
+import { createWorld, updateWorld, addRipple, addFlash, findNavNodeAt, findFalseBeaconAt, triggerFalseBeaconTrap, handleWorldClick, ENTITY_COLORS } from '../lib/simulation'
 import { AudioEngine } from './AudioEngine'
 
 export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (route: string) => void; muffled?: boolean }) {
@@ -96,6 +96,14 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     // Convert screen coordinates to world space
     const cx = clientX * dpr + world.camera.x
     const cy = clientY * dpr + world.camera.y
+
+    // Check false beacon click (before nav nodes — they're traps)
+    const fbIdx = findFalseBeaconAt(world, cx, cy)
+    if (fbIdx >= 0) {
+      triggerFalseBeaconTrap(world, fbIdx)
+      clickedThisFrame.current = true
+      return
+    }
 
     // Check nav node click
     const navNode = findNavNodeAt(world, cx, cy)
@@ -313,6 +321,7 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   drawStars(ctx, world, cam, w, h)
   drawFog(ctx, w, h, world, cam)
   drawGroundScars(ctx, world, cam, w, h)
+  drawDeadZones(ctx, world, cam, w, h)
   drawParticlesForLayer(ctx, world, 0, cam, w, h)
   drawConnectionLines(ctx, world, w, h, cam)
   drawParticlesForLayer(ctx, world, 1, cam, w, h)
@@ -323,6 +332,7 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   drawBeautyBlooms(ctx, world, cam, w, h)
   drawParticlesForLayer(ctx, world, 2, cam, w, h)
   drawNavNodes(ctx, world, cam, w, h)
+  drawFalseBeacons(ctx, world, cam, w, h)
   drawRipples(ctx, world, world.scale, cam, w, h)
   drawFlashes(ctx, world, world.scale, cam, w, h)
 
@@ -561,6 +571,19 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
 
     const strokeW = 1.5 * s + effectiveHeight * 0.008
 
+    // Dead zone: grass near corruptors turns gray/brown
+    let deadZone = 0
+    for (let ci = 0; ci < world.entities.length; ci++) {
+      const ce = world.entities[ci]
+      if (ce.kind !== 'corruptor' || !ce.alive) continue
+      const cdx = blade.x - ce.x
+      const cdy = tipY - ce.y
+      const cdist = Math.sqrt(cdx * cdx + cdy * cdy)
+      if (cdist < 120 * s) {
+        deadZone = Math.max(deadZone, (1 - cdist / (120 * s)) * ce.corruption)
+      }
+    }
+
     // Gravitational shimmer: grass near hidden nav nodes glows warmer
     let navGlow = 0
     for (let n = 0; n < world.navNodes.length; n++) {
@@ -574,7 +597,7 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
     }
 
     // Determine if this blade should be luminous based on karma
-    const isLuminous = blade.luminous || (blade.phase / (Math.PI * 2)) < luminousThreshold || navGlow > 0.1
+    const isLuminous = (blade.luminous || (blade.phase / (Math.PI * 2)) < luminousThreshold || navGlow > 0.1) && deadZone < 0.3
 
     if (isLuminous && !corruptFactor) {
       const glowPulse = 0.4 + Math.sin(time * 1.8 + blade.phase) * 0.3 + Math.sin(time * 0.7 + blade.phase * 2) * 0.2
@@ -595,9 +618,10 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
       ctx.moveTo(blade.x, baseY)
       ctx.quadraticCurveTo(cpX, cpY, tipX, tipY)
       const heightFrac = effectiveHeight / (320 * s)
-      const lit = baseLit * (0.5 + heightFrac * 0.5)
-      const sat = baseSat * (0.5 + heightFrac * 0.5)
-      ctx.strokeStyle = `hsl(${baseHue + heightFrac * 15}, ${Math.max(5, sat)}%, ${Math.max(3, lit)}%)`
+      const lit = baseLit * (0.5 + heightFrac * 0.5) * (1 - deadZone * 0.5)
+      const sat = baseSat * (0.5 + heightFrac * 0.5) * (1 - deadZone * 0.7)
+      const dzHue = baseHue + heightFrac * 15 - deadZone * 50 // shift toward brown
+      ctx.strokeStyle = `hsl(${dzHue}, ${Math.max(5, sat)}%, ${Math.max(3, lit)}%)`
     }
 
     ctx.lineWidth = Math.max(strokeW, 2 * s)
@@ -797,6 +821,34 @@ function _drawBio(ctx: CanvasRenderingContext2D, x: number, y: number, rev: numb
   if (rev > 0.5) {
     const ta = (rev-0.5)/0.5*al*0.5
     ctx.beginPath(); ctx.arc(x, y-6*s, r*0.3, 0, Math.PI*2); ctx.fillStyle = `hsla(${hu},70%,70%,${ta})`; ctx.fill()
+  }
+}
+
+function drawFalseBeacons(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
+  const { time, scale: s } = world
+  for (let i = 0; i < world.falseBeacons.length; i++) {
+    const fb = world.falseBeacons[i]
+    if (!fb.alive || fb.revealed < 0.05) continue
+    if (!onScreen(fb.x, fb.y, cam, w, h, 200)) continue
+    const a = fb.revealed < 0.3 ? fb.revealed / 0.3 * 0.15 : fb.revealed < 0.7 ? 0.15 + (fb.revealed - 0.3) / 0.4 * 0.35 : 0.5 + (fb.revealed - 0.7) / 0.3 * 0.5
+    // Irregular flicker — slightly wrong frequency compared to real nav nodes
+    const fl = 0.6 + Math.sin(time * 5.3 + fb.phase) * 0.2 + Math.sin(time * 11 + fb.phase * 3) * 0.15
+    const p = fb.revealed >= 0.95 ? 1 + Math.sin(time * 3.7 + fb.phase) * 0.2 : 1
+    const r = (4 + fb.revealed * 4) * s * p
+    const hu = 55 + Math.sin(time * 0.8 + fb.phase) * 10 // sickly amber-green instead of warm gold (35)
+    // Outer glow
+    ctx.beginPath(); ctx.arc(fb.x, fb.y, r * 5, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${hu}, 50%, 55%, ${a * 0.10 * fl})`; ctx.fill()
+    // Core
+    ctx.beginPath(); ctx.arc(fb.x, fb.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${hu}, 55%, 65%, ${a * 0.7 * fl})`; ctx.fill()
+    // Fake page shape (like note but subtly wrong — no text lines)
+    if (fb.revealed > 0.3) {
+      const fa = (fb.revealed - 0.3) / 0.7 * a * 0.35 * fl
+      ctx.save(); ctx.translate(fb.x, fb.y); ctx.rotate(Math.sin(time * 0.5 + fb.phase) * 0.15)
+      ctx.fillStyle = `hsla(${hu}, 40%, 70%, ${fa})`; ctx.fillRect(-3*s, -5*s, 6*s, 10*s)
+      ctx.restore()
+    }
   }
 }
 
@@ -1184,6 +1236,20 @@ function drawGroundScars(ctx: CanvasRenderingContext2D, world: WorldState, cam: 
     } else {
       ctx.fillStyle = `hsla(170, 50%, 60%, ${scar.alpha * 0.15})`
     }
+    ctx.fill()
+  }
+}
+
+function drawDeadZones(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
+  const s = world.scale
+  for (let i = 0; i < world.entities.length; i++) {
+    const e = world.entities[i]
+    if (e.kind !== 'corruptor' || !e.alive) continue
+    const r = 100 * s
+    if (!onScreen(e.x, e.y, cam, w, h, r + 50)) continue
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = `rgba(8, 10, 6, ${0.06 * e.corruption})`
     ctx.fill()
   }
 }
