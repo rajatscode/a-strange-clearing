@@ -1339,7 +1339,7 @@ function updateGrass(state: WorldState, _dt: number, _viewportHeight: number): v
 
     let playerBend = 0
     if (dist < bendRadius) {
-      const force = (1 - dist / bendRadius) * 0.7
+      const force = (1 - dist / bendRadius) * 0.7 * (1 + state.mouseSmoothed * 0.1)
       playerBend = (dx > 0 ? 1 : -1) * force
     }
 

@@ -27,6 +27,14 @@ export default function App() {
     return () => { if (fallbackTimer.current) clearTimeout(fallbackTimer.current) }
   }, [])
 
+  // Update tab title for inner pages
+  useEffect(() => {
+    if (displayRoute === 'notes') document.title = '\ud83c\udf3f fragments'
+    else if (displayRoute === 'artifacts') document.title = '\ud83c\udf3f relics'
+    else if (displayRoute === 'bio') document.title = '\ud83c\udf3f rajat'
+    else document.title = '\ud83c\udf3f'
+  }, [displayRoute])
+
   // Listen for hash changes (back/forward)
   useEffect(() => {
     const onHash = () => {

@@ -228,6 +228,14 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
 
         draw(ctx!, world, canvas!.width, canvas!.height)
         drawMuteGlyph(ctx!, canvas!.width, canvas!.height, audioRef.current?.isMuted() ?? false, muteHover.current)
+
+        // Dynamic tab title (~every 2s)
+        if (Math.floor(world.time * 0.5) !== Math.floor((world.time - dt) * 0.5)) {
+          if (!world.player.alive) document.title = '\u00b7'
+          else if (world.smoothKarma.beauty > 0.6) document.title = '\ud83c\udf3f\u2728'
+          else if (world.smoothKarma.corruption > 0.5) document.title = '\ud83c\udf3f\ud83e\udea8'
+          else document.title = '\ud83c\udf3f'
+        }
       }
 
       requestAnimationFrame(render)
@@ -297,7 +305,7 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
     drawEmber(ctx, world)
   } else {
     drawPlayerTrail(ctx, world.player, world.scale)
-    drawPlayer(ctx, world.player, world.time, world.scale)
+    drawPlayer(ctx, world.player, world.time, world.scale, world.smoothKarma)
   }
 
   ctx.restore()
@@ -400,14 +408,18 @@ function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: Wor
   ctx.fillStyle = `hsla(${fogHue - 25}, ${fogSat}%, 8%, ${fogAlpha * 1.5})`
   ctx.fillRect(cx, cy + h * 0.9, w, h * 0.1)
 
-  // Drifting mist patches
+  // Drifting mist patches — radial gradients for soft atmospheric feel
   for (let i = 0; i < 2; i++) {
     const mx = cx + w * (0.1 + i * 0.4) + Math.sin(time * 0.04 + i * 1.7) * w * 0.12
     const my = cy + h * (0.3 + i * 0.15) + Math.cos(time * 0.025 + i * 2.3) * h * 0.05
-    const mw = w * 0.4
-    const mh = h * 0.15
-    ctx.fillStyle = `hsla(${fogHue + i * 15}, ${fogSat - 5}%, 22%, ${fogAlpha * 0.7})`
-    ctx.fillRect(mx - mw / 2, my - mh / 2, mw, mh)
+    const mr = w * 0.25
+    const grad = ctx.createRadialGradient(mx, my, 0, mx, my, mr)
+    grad.addColorStop(0, `hsla(${fogHue + i * 15}, ${Math.max(0, fogSat - 5)}%, 22%, ${fogAlpha * 0.7})`)
+    grad.addColorStop(1, 'transparent')
+    ctx.fillStyle = grad
+    ctx.beginPath()
+    ctx.arc(mx, my, mr, 0, Math.PI * 2)
+    ctx.fill()
   }
 }
 
@@ -415,6 +427,10 @@ function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState,
   const { smoothKarma: karma } = world
   const layerScale = layer === 0 ? 0.6 : layer === 1 ? 1.0 : 1.5
   const alphaBase = layer === 0 ? 0.4 : layer === 1 ? 0.6 : 0.8
+  // Parallax: background layers move less with camera
+  const parallax = layer === 0 ? 0.3 : layer === 1 ? 0.7 : 1.0
+  const parallaxOffX = cam.x * (1 - parallax)
+  const parallaxOffY = cam.y * (1 - parallax)
 
   // Beauty: brighter particles, warmer hues
   // Corruption: dimmer, colder/grayer
@@ -443,14 +459,17 @@ function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState,
     const sat = Math.round(60 * satMult)
     const coreSat = Math.round(70 * satMult)
 
+    const px = p.x + parallaxOffX
+    const py = p.y + parallaxOffY
+
     const haloR = r * 5
     ctx.beginPath()
-    ctx.arc(p.x, p.y, haloR, 0, Math.PI * 2)
+    ctx.arc(px, py, haloR, 0, Math.PI * 2)
     ctx.fillStyle = `hsla(${p.hue}, ${sat}%, 55%, ${alpha * 0.06})`
     ctx.fill()
 
     ctx.beginPath()
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+    ctx.arc(px, py, r, 0, Math.PI * 2)
     ctx.fillStyle = `hsla(${p.hue}, ${coreSat}%, 85%, ${alpha * 0.9})`
     ctx.fill()
   }
@@ -626,25 +645,29 @@ function drawPlayerTrail(ctx: CanvasRenderingContext2D, player: WorldState['play
   }
 }
 
-function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'], time: number, scale: number) {
+function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'], time: number, scale: number, sk: WorldState['smoothKarma']) {
   const { x, y, aura, energy } = player
   const pulse = Math.sin(time * 2.5) * 0.12 + 1
   const breathe = Math.sin(time * 1.2) * 0.08 + 1
-  // Fade player as energy drops toward death
   const energyAlpha = 0.3 + energy * 0.7
 
-  // Outer aura — simple alpha circle
+  // Karma-responsive player color
+  const hue = Math.round(165 + sk.corruption * 45 - sk.beauty * 15)
+  const sat = Math.round(85 - sk.corruption * 30)
+  const lit = Math.round(82 - sk.corruption * 15 + sk.beauty * 5)
+
+  // Outer aura
   const outerR = aura * pulse * 3.5
   ctx.beginPath()
   ctx.arc(x, y, outerR, 0, Math.PI * 2)
-  ctx.fillStyle = `hsla(185, 75%, 70%, ${0.06 * energy * energyAlpha})`
+  ctx.fillStyle = `hsla(${hue + 5}, ${Math.max(40, sat - 10)}%, ${Math.min(90, lit - 12)}%, ${0.06 * energy * energyAlpha})`
   ctx.fill()
 
-  // Mid aura — simple alpha circle
+  // Mid aura
   const midR = aura * breathe * 1.8
   ctx.beginPath()
   ctx.arc(x, y, midR, 0, Math.PI * 2)
-  ctx.fillStyle = `hsla(180, 85%, 75%, ${0.15 * energy * energyAlpha})`
+  ctx.fillStyle = `hsla(${hue}, ${sat}%, ${Math.min(90, lit - 7)}%, ${0.15 * energy * energyAlpha})`
   ctx.fill()
 
   // Core blob — organic wobble (20 steps)
@@ -663,14 +686,14 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'],
     else ctx.lineTo(px, py)
   }
   ctx.closePath()
-  ctx.fillStyle = `hsla(180, 85%, 82%, ${(0.65 + energy * 0.35) * energyAlpha})`
+  ctx.fillStyle = `hsla(${hue}, ${sat}%, ${lit}%, ${(0.65 + energy * 0.35) * energyAlpha})`
   ctx.fill()
 
-  // Inner bright center — simple alpha circle
+  // Inner bright center
   const innerR = coreR * 0.5
   ctx.beginPath()
   ctx.arc(x, y, innerR, 0, Math.PI * 2)
-  ctx.fillStyle = `hsla(175, 95%, 95%, ${0.8 * energy * energyAlpha})`
+  ctx.fillStyle = `hsla(${hue - 5}, ${Math.min(100, sat + 10)}%, ${Math.min(98, lit + 13)}%, ${0.8 * energy * energyAlpha})`
   ctx.fill()
 }
 
