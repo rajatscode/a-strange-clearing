@@ -214,10 +214,10 @@ export const ENTITY_COLORS: Record<EntityKind, { r: number; g: number; b: number
 
 function spawnEntities(width: number, height: number, scale: number): Entity[] {
   const area = width * height
-  const baseCount = 30
+  const baseCount = 40
   const isSmallViewport = typeof window !== 'undefined' && window.innerWidth < 400
-  const countScale = Math.max(0.5, Math.min(1.5, area / (1920 * 1080 * 4))) * (isSmallViewport ? 0.5 : 1)
-  const total = Math.floor(baseCount * countScale)
+  const areaScale = Math.max(0.6, Math.min(2.0, area / (1920 * 1080 * 6)))
+  const total = Math.floor(baseCount * areaScale * (isSmallViewport ? 0.5 : 1))
 
   const kinds: EntityKind[] = []
   const dist = [
@@ -261,22 +261,23 @@ function createNavNodes(width: number, height: number, karma: KarmaState): NavNo
   const margin = 0.15
 
   // First visit: nodes placed close to center so they're discoverable within 15-30s
+  // Player starts at (0.5, 0.5) — keep nav nodes within ~10% of center
   const noteX = firstVisit
-    ? width * (0.40 + Math.random() * 0.06)
+    ? width * (0.44 + Math.random() * 0.04)
     : width * (margin + Math.random() * (1 - margin * 2))
   const noteY = firstVisit
-    ? height * (0.38 + Math.random() * 0.08)
+    ? height * (0.40 + Math.random() * 0.06)
     : height * (0.2 + Math.random() * 0.4)
 
   const artX = firstVisit
-    ? width * (0.55 + Math.random() * 0.06)
+    ? width * (0.52 + Math.random() * 0.04)
     : width * (margin + Math.random() * (1 - margin * 2))
   const artY = firstVisit
-    ? height * (0.42 + Math.random() * 0.08)
+    ? height * (0.44 + Math.random() * 0.06)
     : height * (0.2 + Math.random() * 0.4)
 
-  const bioX = width * (0.47 + Math.random() * 0.06)
-  const bioY = height * (0.55 + Math.random() * 0.06)
+  const bioX = width * (0.48 + Math.random() * 0.04)
+  const bioY = height * (0.54 + Math.random() * 0.04)
 
   return [
     { kind: 'note', x: noteX, y: noteY, baseX: noteX, baseY: noteY, revealed: firstVisit ? 0.15 : 0, phase: Math.random() * Math.PI * 2, route: '#/notes' },
@@ -291,18 +292,17 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
   const scale = viewportHeight / 800
 
   // World is larger than viewport
-  const worldWidth = viewportWidth * 3
-  const worldHeight = viewportHeight * 2
+  const worldWidth = viewportWidth * 5
+  const worldHeight = viewportHeight * 3
 
-  const area = worldWidth * worldHeight
-  const densityScale = Math.min(1, area / (1920 * 1080 * 4))
+  const worldRatio = (worldWidth / viewportWidth) * (worldHeight / viewportHeight)
   const isMobile = 'ontouchstart' in window || window.innerWidth < 768
   const isSmallViewport = window.innerWidth < 400
   const mobileScale = isSmallViewport ? 0.35 : isMobile ? 0.6 : 1
   const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const motionScale = reducedMotion ? 0.5 : 1
-  const grassCount = Math.floor((180 + mood.grassDensity * 70) * densityScale * mobileScale)
-  const particleCount = Math.floor((35 + mood.driftSpeed * 15) * densityScale * mobileScale * motionScale)
+  const grassCount = Math.min(400, Math.floor((180 + mood.grassDensity * 70) * Math.sqrt(worldRatio) * mobileScale))
+  const particleCount = Math.min(80, Math.floor((35 + mood.driftSpeed * 15) * Math.sqrt(worldRatio) * mobileScale * motionScale))
 
   const grass: GrassBlade[] = []
   for (let i = 0; i < grassCount; i++) {
