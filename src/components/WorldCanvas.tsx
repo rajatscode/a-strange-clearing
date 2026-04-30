@@ -321,7 +321,19 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
     drawEmber(ctx, world)
   } else {
     drawPlayerTrail(ctx, world.player, world.scale)
-    drawPlayer(ctx, world.player, world.time, world.scale, world.smoothKarma)
+    // Find nearest entity for cursor hint
+    let hoverKind: string | null = null
+    const px = world.player.x, py = world.player.y
+    for (let i = 0; i < world.entities.length; i++) {
+      const en = world.entities[i]
+      if (!en.alive) continue
+      const ddx = en.x - px, ddy = en.y - py
+      if (ddx * ddx + ddy * ddy < (en.radius * 2) * (en.radius * 2)) {
+        hoverKind = en.kind
+        break
+      }
+    }
+    drawPlayer(ctx, world.player, world.time, world.scale, world.smoothKarma, hoverKind)
   }
 
   ctx.restore()
@@ -661,16 +673,22 @@ function drawPlayerTrail(ctx: CanvasRenderingContext2D, player: WorldState['play
   }
 }
 
-function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'], time: number, scale: number, sk: WorldState['smoothKarma']) {
+function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'], time: number, scale: number, sk: WorldState['smoothKarma'], hoverKind: string | null = null) {
   const { x, y, aura, energy } = player
   const pulse = Math.sin(time * 2.5) * 0.12 + 1
   const breathe = Math.sin(time * 1.2) * 0.08 + 1
   const energyAlpha = 0.3 + energy * 0.7
 
-  // Karma-responsive player color
-  const hue = Math.round(165 + sk.corruption * 45 - sk.beauty * 15)
-  const sat = Math.round(85 - sk.corruption * 30)
-  const lit = Math.round(82 - sk.corruption * 15 + sk.beauty * 5)
+  // Karma-responsive player color with entity hover hint
+  let hueShift = 0, satShift = 0, litShift = 0
+  if (hoverKind === 'cooperator') { hueShift = -20; satShift = 5; litShift = 3 }     // warmer green
+  else if (hoverKind === 'defector') { hueShift = 30; satShift = -10; litShift = -2 }  // toward red/amber
+  else if (hoverKind === 'corruptor') { hueShift = 10; satShift = -15; litShift = -8 } // dims
+  else if (hoverKind === 'fragile') { hueShift = -5; satShift = -5; litShift = -4 }    // softer/warmer
+
+  const hue = Math.round(165 + sk.corruption * 45 - sk.beauty * 15 + hueShift)
+  const sat = Math.round(Math.max(30, 85 - sk.corruption * 30 + satShift))
+  const lit = Math.round(Math.max(50, Math.min(95, 82 - sk.corruption * 15 + sk.beauty * 5 + litShift)))
 
   // Outer aura
   const outerR = aura * pulse * 3.5
@@ -775,7 +793,7 @@ function _drawBio(ctx: CanvasRenderingContext2D, x: number, y: number, rev: numb
 // ---- Entity Drawing ----
 
 function drawEntities(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
-  const { entities, time, scale, karma } = world
+  const { entities, player, time, scale, karma } = world
   const trustBoost = karma.trust * 0.3
 
   for (let i = 0; i < entities.length; i++) {
@@ -784,18 +802,22 @@ function drawEntities(ctx: CanvasRenderingContext2D, world: WorldState, cam: Cam
     if (!onScreen(e.x, e.y, cam, w, h, e.radius * 6)) continue
 
     const col = ENTITY_COLORS[e.kind]
+    // Proximity factor: 1.0 when touching player, 0.0 when >= 150px away
+    const dx = e.x - player.x, dy = e.y - player.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    const prox = Math.max(0, 1 - dist / (150 * scale))
     const pulse = Math.sin(time * 2 + e.phase) * 0.15 + 1
 
     if (e.kind === 'wanderer') {
       drawWanderer(ctx, e, col, pulse, scale, trustBoost)
     } else if (e.kind === 'fragile') {
-      drawFragile(ctx, e, col, pulse, time, scale)
+      drawFragile(ctx, e, col, pulse, time, scale, prox, player.aggression)
     } else if (e.kind === 'cooperator') {
-      drawCooperator(ctx, e, col, pulse, scale, trustBoost)
+      drawCooperator(ctx, e, col, pulse, scale, trustBoost, prox)
     } else if (e.kind === 'defector') {
-      drawDefector(ctx, e, col, pulse, time, scale)
+      drawDefector(ctx, e, col, pulse, time, scale, prox)
     } else if (e.kind === 'corruptor') {
-      drawCorruptor(ctx, e, col, pulse, time, scale)
+      drawCorruptor(ctx, e, col, pulse, time, scale, prox)
     }
   }
 }
@@ -824,109 +846,119 @@ function drawWanderer(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number
   ctx.fill()
 }
 
-function drawFragile(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, _s: number) {
+function drawFragile(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, _s: number, prox: number = 0, playerAggression: number = 0) {
   // Shrink dramatically when drained
   const energyScale = 0.4 + e.energy * 0.6
-  const r = e.radius * energyScale * pulse
-  // Flickering — more frantic when low energy
-  const flickerSpeed = e.energy < 0.3 ? 12 : 5
+  // Flinch when aggressive player is near
+  const flinch = prox > 0.3 && playerAggression > 0.5 ? 1 - prox * 0.3 : 1
+  const r = e.radius * energyScale * pulse * flinch
+  // Flickering — more frantic when low energy or flinching
+  const flickerSpeed = (e.energy < 0.3 || (prox > 0.3 && playerAggression > 0.5)) ? 12 : 5
   const flickerAmp = e.energy < 0.3 ? 0.35 : 0.2
   const flicker = 0.5 + Math.sin(time * flickerSpeed + e.phase) * flickerAmp + Math.sin(time * 8.3 + e.phase * 2) * 0.15
   const alpha = (0.15 + e.energy * 0.5) * flicker
+
+  // Warm glow when gentle player is near
+  const warmShift = prox > 0 && playerAggression < 0.3 ? prox * 30 : 0
 
   // Dim warm glow
   const haloR = r * 3
   ctx.beginPath()
   ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.06})`
+  ctx.fillStyle = `rgba(${Math.min(255, col.r + warmShift)}, ${col.g}, ${col.b}, ${alpha * 0.06})`
   ctx.fill()
 
   // Small flickering core
   ctx.beginPath()
   ctx.arc(e.x, e.y, r, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.5})`
+  ctx.fillStyle = `rgba(${Math.min(255, col.r + warmShift)}, ${col.g}, ${col.b}, ${alpha * 0.5})`
   ctx.fill()
 }
 
-function drawCooperator(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, _s: number, trustBoost: number) {
+function drawCooperator(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, _s: number, trustBoost: number, prox: number = 0) {
   const r = e.radius * pulse * (1 + trustBoost * 0.3)
-  const alpha = 0.6 + e.energy * 0.3 + e.beauty * 0.2
+  // Brighten when player is near
+  const proxBoost = 1 + prox * 0.5
+  const alpha = (0.6 + e.energy * 0.3 + e.beauty * 0.2) * proxBoost
 
-  // Large warm bloom halo — 2x bigger, brighter
-  const haloR = r * 8
+  // Large warm bloom halo — expands toward player
+  const haloR = r * (8 + prox * 3)
   ctx.beginPath()
   ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.08})`
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${Math.min(0.2, alpha * 0.08)})`
   ctx.fill()
 
   // Secondary glow ring
   const midR = r * 4
   ctx.beginPath()
   ctx.arc(e.x, e.y, midR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.12})`
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${Math.min(0.25, alpha * 0.12)})`
   ctx.fill()
 
   // Core
   ctx.beginPath()
   ctx.arc(e.x, e.y, r, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.7})`
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${Math.min(0.9, alpha * 0.7)})`
   ctx.fill()
 
   // Bright inner glow
   ctx.beginPath()
   ctx.arc(e.x, e.y, r * 0.5, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(${Math.min(255, col.r + 100)}, ${Math.min(255, col.g + 60)}, ${Math.min(255, col.b + 80)}, ${alpha * 0.9})`
+  ctx.fillStyle = `rgba(${Math.min(255, col.r + 100)}, ${Math.min(255, col.g + 60)}, ${Math.min(255, col.b + 80)}, ${Math.min(1, alpha * 0.9)})`
   ctx.fill()
 }
 
-function drawDefector(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, _s: number) {
+function drawDefector(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, _s: number, prox: number = 0) {
   const r = e.radius * pulse
-  const alpha = 0.5 + e.hostility * 0.35
+  // Intensify red pulse when player is near
+  const proxIntensity = 1 + prox * 0.6
+  const alpha = (0.5 + e.hostility * 0.35) * proxIntensity
 
-  // Angry red halo — larger and more visible
-  const haloR = r * 4.5
+  // Angry red halo — expands when player approaches
+  const haloR = r * (4.5 + prox * 2)
   ctx.beginPath()
   ctx.arc(e.x, e.y, haloR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(240, 80, 40, ${alpha * 0.10})`
+  ctx.fillStyle = `rgba(240, 80, 40, ${Math.min(0.25, alpha * 0.10)})`
   ctx.fill()
 
-  // Angular core — hexagonal, larger
+  // Angular core — hexagonal, wobbles faster near player
   ctx.beginPath()
   const sides = 6
+  const wobbleSpeed = 3 + prox * 4
   for (let j = 0; j <= sides; j++) {
     const a = (j / sides) * Math.PI * 2
-    const wobble = 1 + Math.sin(a * 2 + time * 3) * 0.20
+    const wobble = 1 + Math.sin(a * 2 + time * wobbleSpeed) * (0.20 + prox * 0.1)
     const px = e.x + Math.cos(a) * r * wobble
     const py = e.y + Math.sin(a) * r * wobble
     if (j === 0) ctx.moveTo(px, py)
     else ctx.lineTo(px, py)
   }
   ctx.closePath()
-  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.65})`
+  ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${Math.min(0.9, alpha * 0.65)})`
   ctx.fill()
 
   // Bright red center — unmistakable
   ctx.beginPath()
   ctx.arc(e.x, e.y, r * 0.45, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(255, 70, 40, ${alpha * 0.85})`
+  ctx.fillStyle = `rgba(255, 70, 40, ${Math.min(1, alpha * 0.85)})`
   ctx.fill()
 }
 
-function drawCorruptor(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, s: number) {
+function drawCorruptor(ctx: CanvasRenderingContext2D, e: Entity, col: { r: number; g: number; b: number }, pulse: number, time: number, s: number, prox: number = 0) {
   const r = e.radius * pulse
   const alpha = 0.4 + e.corruption * 0.4
 
-  // Pulsing dark aura — large, unmistakable
+  // Pulsing dark aura — expands toward player as a visual threat
   const auraPulse = 1 + Math.sin(time * 2 + e.phase) * 0.25
-  const auraR = e.radius * 4 * auraPulse
+  const auraR = e.radius * (4 + prox * 3) * auraPulse
   ctx.beginPath()
   ctx.arc(e.x, e.y, auraR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(40, 50, 30, ${0.12 * e.corruption})`
+  ctx.fillStyle = `rgba(40, 50, 30, ${(0.12 + prox * 0.08) * e.corruption})`
   ctx.fill()
 
-  // Sickly halo with distortion
+  // Sickly halo with distortion — more distortion near player
   const haloR = r * 5
-  const distort = Math.sin(time * 4 + e.phase) * 0.2
+  const distort = Math.sin(time * 4 + e.phase) * (0.2 + prox * 0.3)
   ctx.beginPath()
   ctx.arc(e.x + distort * r, e.y, haloR, 0, Math.PI * 2)
   ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${alpha * 0.1})`
@@ -1105,12 +1137,27 @@ function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState, w
     if (line.alpha < 0.02) continue
     // Only draw if both endpoints are on screen
     if (!onScreen(line.x1, line.y1, cam, w, h) || !onScreen(line.x2, line.y2, cam, w, h)) continue
+
+    // Cooperate lines pulse/breathe when active
+    let alpha = line.alpha
+    if (line.kind === 'cooperate') {
+      alpha *= 0.7 + Math.sin(world.time * 1.5 + i * 0.4) * 0.3
+    }
+
     ctx.beginPath()
     ctx.moveTo(line.x1, line.y1)
     ctx.lineTo(line.x2, line.y2)
-    ctx.strokeStyle = `hsla(${colors[line.kind]}, ${line.alpha})`
+    ctx.strokeStyle = `hsla(${colors[line.kind]}, ${alpha})`
     ctx.lineWidth = (line.kind === 'hunt' ? 2.0 : line.kind === 'corrupt' ? 1.5 : 1.0) * world.scale
     ctx.stroke()
+
+    // Drain flash: tiny dim flash at target of hunt lines
+    if (line.kind === 'hunt' && alpha > 0.1) {
+      ctx.beginPath()
+      ctx.arc(line.x2, line.y2, 3 * world.scale, 0, Math.PI * 2)
+      ctx.fillStyle = `rgba(255, 120, 80, ${alpha * 0.15})`
+      ctx.fill()
+    }
   }
 }
 
