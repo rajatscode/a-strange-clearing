@@ -246,9 +246,9 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
         // Dynamic tab title (~every 2s)
         if (Math.floor(world.time * 0.5) !== Math.floor((world.time - dt) * 0.5)) {
           if (!world.player.alive) document.title = '\u00b7'
-          else if (world.smoothKarma.beauty > 0.6) document.title = '\ud83c\udf3f\u2728'
-          else if (world.smoothKarma.corruption > 0.5) document.title = '\ud83c\udf3f\ud83e\udea8'
-          else document.title = '\ud83c\udf3f'
+          else if (world.smoothKarma.beauty > 0.6) document.title = '\u2728\ud83c\udf3f'
+          else if (world.smoothKarma.corruption > 0.5) document.title = '\u2728\ud83e\udea8'
+          else document.title = '\u2728'
         }
       }
 

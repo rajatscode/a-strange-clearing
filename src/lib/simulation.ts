@@ -499,30 +499,46 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
       player.energy -= transfer
       e.energy = Math.min(1, e.energy + transfer * 1.5)
       e.trust = Math.min(1, e.trust + 0.1)
-      e.radius = Math.min(e.radius * 1.08, 8 * state.scale)
-      karma.beauty = Math.min(1, karma.beauty + 0.02)
+      e.radius = Math.min(e.radius * 1.8, 12 * state.scale)  // dramatic size burst
+      karma.beauty = Math.min(1, karma.beauty + 0.03)
       karma.generosity = Math.min(1, karma.generosity + 0.03)
-      karma.trust = Math.min(1, karma.trust + 0.01)
-      addBeautyBloom(state, e.x, e.y, 80)
+      karma.trust = Math.min(1, karma.trust + 0.02)
+      karma.navigability = Math.min(1, karma.navigability + 0.1)  // kindness opens paths
+      addBeautyBloom(state, e.x, e.y, 150)
+      addFlash(state, e.x, e.y, 255, 220, 140, 80 * state.scale)  // warm saving glow
       return { type: 'fragile_nourish', entityIndex: idx }
     }
 
     if (e.kind === 'cooperator') {
       player.energy = Math.min(1, player.energy + 0.05)
-      e.energy = Math.min(1, e.energy + 0.03)
-      e.trust = Math.min(1, e.trust + 0.05)
-      e.beauty = Math.min(1, e.beauty + 0.03)
-      karma.beauty = Math.min(1, karma.beauty + 0.015)
-      karma.trust = Math.min(1, karma.trust + 0.01)
+      e.energy = Math.min(1, e.energy + 0.05)
+      e.trust = Math.min(1, e.trust + 0.08)
+      e.beauty = Math.min(1, e.beauty + 0.05)
+      karma.beauty = Math.min(1, karma.beauty + 0.025)
+      karma.trust = Math.min(1, karma.trust + 0.02)
+      // Beauty bloom between player and entity
+      const mx = (player.x + e.x) / 2
+      const my = (player.y + e.y) / 2
+      addBeautyBloom(state, mx, my, 120)
+      addFlash(state, mx, my, 100, 240, 180, 60 * state.scale)
       return { type: 'cooperator_exchange', entityIndex: idx }
     }
 
     if (e.kind === 'defector') {
-      const drain = 0.08 + Math.random() * 0.07
+      const drain = 0.12 + Math.random() * 0.08
       player.energy = Math.max(0, player.energy - drain)
-      e.hostility = Math.min(1, e.hostility + 0.1)
-      karma.hostility = Math.min(1, karma.hostility + 0.02)
+      e.hostility = Math.min(1, e.hostility + 0.15)
+      karma.hostility = Math.min(1, karma.hostility + 0.03)
       karma.extraction = Math.min(1, karma.extraction + 0.02)
+      // Defector flees dramatically
+      const fdx = e.x - player.x
+      const fdy = e.y - player.y
+      const fdist = Math.sqrt(fdx * fdx + fdy * fdy)
+      if (fdist > 0) {
+        e.vx += (fdx / fdist) * 3.0
+        e.vy += (fdy / fdist) * 3.0
+      }
+      addFlash(state, player.x, player.y, 180, 60, 40, 50 * state.scale)  // player dimming flash
       return { type: 'defector_risk', entityIndex: idx }
     }
 
@@ -535,13 +551,15 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
       if (Math.random() < successChance) {
         e.corruption = Math.max(0, e.corruption - 0.4)
         e.hostility = Math.max(0, e.hostility - 0.3)
-        karma.beauty = Math.min(1, karma.beauty + 0.04)
-        karma.corruption = Math.max(0, karma.corruption - 0.03)
-        karma.trust = Math.min(1, karma.trust + 0.02)
+        karma.beauty = Math.min(1, karma.beauty + 0.05)
+        karma.corruption = Math.max(0, karma.corruption - 0.04)
+        karma.trust = Math.min(1, karma.trust + 0.03)
+        karma.navigability = Math.min(1, karma.navigability + 0.1)  // cleansing opens paths
         state.worldEvents.cleanseSuccess = true
 
         // Dramatic cleanse bloom — large area restoration
-        addBeautyBloom(state, e.x, e.y, 200)
+        addBeautyBloom(state, e.x, e.y, 300)
+        addFlash(state, e.x, e.y, 200, 255, 220, 150 * state.scale)  // big warm restoration
 
         if (e.corruption < 0.2) {
           e.kind = 'fragile'
@@ -551,11 +569,12 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
         }
         return { type: 'corruptor_cleanse_success', entityIndex: idx }
       } else {
-        player.energy = Math.max(0, player.energy - 0.1)
-        karma.corruption = Math.min(1, karma.corruption + 0.03)
-        e.hostility = Math.min(1, e.hostility + 0.15)
-        // Corruption pulse outward on fail
-        addFlash(state, e.x, e.y, 80, 100, 60, 120 * state.scale)
+        player.energy = Math.max(0, player.energy - 0.12)
+        karma.corruption = Math.min(1, karma.corruption + 0.04)
+        e.hostility = Math.min(1, e.hostility + 0.2)
+        // Corruption pulse outward on fail — dark flash
+        addFlash(state, e.x, e.y, 60, 80, 40, 150 * state.scale)
+        addFlash(state, player.x, player.y, 40, 50, 30, 60 * state.scale)  // player darkens
         return { type: 'corruptor_cleanse_fail', entityIndex: idx }
       }
     }
@@ -567,6 +586,20 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
     }
   }
 
+  // Empty space click = "calling out" — attract nearby entities
+  const attractRadius = 200 * state.scale
+  for (let i = 0; i < state.entities.length; i++) {
+    const e = state.entities[i]
+    if (!e.alive) continue
+    const edx = x - e.x
+    const edy = y - e.y
+    const edist = Math.sqrt(edx * edx + edy * edy)
+    if (edist < attractRadius && edist > 10) {
+      const pull = (1 - edist / attractRadius) * 0.8
+      e.vx += (edx / edist) * pull
+      e.vy += (edy / edist) * pull
+    }
+  }
   return { type: 'ripple' }
 }
 
@@ -763,8 +796,10 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
 function updateNavNodes(state: WorldState, dt: number): void {
   const { player, karma } = state
   const s = state.scale
-  const revealRadius = (80 + karma.navigability * 40) * s
-  const hintRadius = 200 * s
+  // Navigability strongly affects reveal radius and rate
+  const navMult = karma.navigability > 0.5 ? 1 + (karma.navigability - 0.5) * 4 : karma.navigability * 0.4  // 3x at nav=1, 0.1x at nav=0
+  const revealRadius = (80 + karma.navigability * 80) * s  // 2x larger glow radius
+  const hintRadius = 250 * s
 
   for (let i = 0; i < state.navNodes.length; i++) {
     const node = state.navNodes[i]
@@ -783,7 +818,7 @@ function updateNavNodes(state: WorldState, dt: number): void {
 
     if (dist < revealRadius && player.aggression < 0.5) {
       const proximity = 1 - dist / revealRadius
-      const revealRate = (0.15 + player.patience * 0.25 + player.stillness * 0.2) * proximity
+      const revealRate = (0.15 + player.patience * 0.25 + player.stillness * 0.2) * proximity * navMult
       node.revealed = Math.min(1, node.revealed + dt * revealRate)
     } else if (dist < hintRadius) {
       node.revealed = Math.max(0, node.revealed - dt * 0.03)
@@ -815,7 +850,7 @@ function updateFalseBeacons(state: WorldState, dt: number): void {
   }
 
   // Reveal/fade like nav nodes
-  const revealRadius = (80 + karma.navigability * 40) * s
+  const revealRadius = (80 + karma.navigability * 80) * s
   for (let i = 0; i < state.falseBeacons.length; i++) {
     const fb = state.falseBeacons[i]
     if (!fb.alive) continue
@@ -1008,17 +1043,17 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
           if (Math.abs(odx) > huntRange || Math.abs(ody) > huntRange) continue
           const odist = Math.sqrt(odx * odx + ody * ody)
           if (odist < huntRange && odist > 15 * s) {
-            seekX += (odx / odist) * 0.20
-            seekY += (ody / odist) * 0.20
+            seekX += (odx / odist) * 0.40
+            seekY += (ody / odist) * 0.40
           }
           if (odist < 30 * s) {
-            other.energy = Math.max(0, other.energy - dt * 0.14)
-            e.energy = Math.min(1, e.energy + dt * 0.06)
-            e.radius = Math.min(e.radius * 1.001, 15 * state.scale)
-            karma.hostility = Math.min(1, karma.hostility + dt * 0.003)
+            other.energy = Math.max(0, other.energy - dt * 0.35)
+            e.energy = Math.min(1, e.energy + dt * 0.10)
+            e.radius = Math.min(e.radius * 1.003, 15 * state.scale)
+            karma.hostility = Math.min(1, karma.hostility + dt * 0.005)
             if (other.energy <= 0) {
               killEntity(state, other)
-              addFlash(state, e.x, e.y, 240, 60, 40, 60 * s)
+              addFlash(state, e.x, e.y, 255, 40, 30, 120 * s)
             }
           }
         }
@@ -1036,11 +1071,11 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
           const odist = Math.sqrt(odx * odx + ody * ody)
           if (odist < corruptRange) {
             const prevCorruption = other.corruption
-            other.corruption = Math.min(1, other.corruption + dt * 0.018 * e.corruption)
-            other.beauty = Math.max(0, other.beauty - dt * 0.008)
+            other.corruption = Math.min(1, other.corruption + dt * 0.06 * e.corruption)
+            other.beauty = Math.max(0, other.beauty - dt * 0.025)
             state.worldEvents.corruptionSpread = true
             if (prevCorruption < 0.1 && other.corruption >= 0.1) {
-              addFlash(state, other.x, other.y, 100, 140, 70, 50 * s)
+              addFlash(state, other.x, other.y, 100, 160, 50, 80 * s)
             }
           }
         }
@@ -1098,7 +1133,7 @@ function rebuildConnectionLines(state: WorldState): void {
         if (Math.abs(dx) > coopLineDist || Math.abs(dy) > coopLineDist) continue
         const dist = Math.sqrt(dx * dx + dy * dy)
         if (dist < coopLineDist) {
-          const alpha = (1 - dist / (140 * s)) * 0.3 * Math.min(e.energy, other.energy)
+          const alpha = (1 - dist / (140 * s)) * 0.5 * Math.min(e.energy, other.energy)
           state.connectionLines.push({
             x1: e.x, y1: e.y, x2: other.x, y2: other.y,
             alpha, kind: 'cooperate',
@@ -1169,8 +1204,8 @@ function rebuildConnectionLines(state: WorldState): void {
 }
 
 function checkCooperatorClusters(state: WorldState, dt: number): void {
-  if (state.time - state.lastBloomTime < 8) return
-  const checkInterval = 3
+  if (state.time - state.lastBloomTime < 4) return
+  const checkInterval = 2
   if (Math.floor(state.time / checkInterval) === Math.floor((state.time - dt) / checkInterval)) return
 
   const s = state.scale
@@ -1193,7 +1228,7 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
       }
     }
 
-    if (nearby.length >= 3) {
+    if (nearby.length >= 2) {
       let cx = 0, cy = 0
       for (const idx of nearby) {
         cx += entities[idx].x
@@ -1212,7 +1247,7 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
       state.karma.beauty = Math.min(1, state.karma.beauty + 0.02)
 
       // Chance of ascension
-      if (state.stars.length < 15 && Math.random() < 0.15) {
+      if (state.stars.length < 15 && nearby.length >= 3 && Math.random() < 0.25) {
         state.worldEvents.starFormed = true
         const ascIdx = nearby[Math.floor(Math.random() * nearby.length)]
         const asc = entities[ascIdx]
@@ -1252,7 +1287,7 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
 }
 
 function checkSpawning(state: WorldState, dt: number, _viewportWidth: number, _viewportHeight: number): void {
-  const interval = 8
+  const interval = 5
   if (state.time - state.lastSpawnTime < interval) return
   if (Math.floor(state.time / interval) === Math.floor((state.time - dt) / interval)) return
 

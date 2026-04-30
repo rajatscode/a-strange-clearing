@@ -30,10 +30,10 @@ export default function App() {
 
   // Update tab title for inner pages
   useEffect(() => {
-    if (displayRoute === 'notes') document.title = '\ud83c\udf3f fragments'
-    else if (displayRoute === 'artifacts') document.title = '\ud83c\udf3f relics'
-    else if (displayRoute === 'bio') document.title = '\ud83c\udf3f rajat'
-    else document.title = '\ud83c\udf3f'
+    if (displayRoute === 'notes') document.title = '\u2728 fragments'
+    else if (displayRoute === 'artifacts') document.title = '\u2728 relics'
+    else if (displayRoute === 'bio') document.title = '\u2728 rajat'
+    else document.title = '\u2728'
   }, [displayRoute])
 
   // Listen for hash changes (back/forward)
