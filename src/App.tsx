@@ -19,14 +19,7 @@ export default function App() {
   const [route, setRoute] = useState<Route>(parseHash)
   const [displayRoute, setDisplayRoute] = useState<Route>(route)
   const [phase, setPhase] = useState<TransitionPhase>('idle')
-  const [showFallbackLinks, setShowFallbackLinks] = useState(false)
-  const fallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingRoute = useRef<Route | null>(null)
-
-  useEffect(() => {
-    fallbackTimer.current = setTimeout(() => setShowFallbackLinks(true), 60000)
-    return () => { if (fallbackTimer.current) clearTimeout(fallbackTimer.current) }
-  }, [])
 
   // Update tab title for inner pages
   useEffect(() => {
@@ -149,28 +142,6 @@ export default function App() {
           {displayRoute === 'bio' && (
             <BioPage onBack={handleBack} />
           )}
-        </div>
-      )}
-      {showFallbackLinks && displayRoute === 'clearing' && (
-        <div style={{
-          position: 'fixed',
-          bottom: 12,
-          left: 0,
-          right: 0,
-          textAlign: 'center',
-          opacity: 0.15,
-          fontSize: 11,
-          fontFamily: 'monospace',
-          letterSpacing: 2,
-          color: '#8a9a90',
-          zIndex: 10,
-          pointerEvents: 'auto',
-        }}>
-          <a href="#/notes" style={{ color: 'inherit', textDecoration: 'none', margin: '0 8px' }}>notes</a>
-          <span style={{ opacity: 0.4 }}>&middot;</span>
-          <a href="#/artifacts" style={{ color: 'inherit', textDecoration: 'none', margin: '0 8px' }}>artifacts</a>
-          <span style={{ opacity: 0.4 }}>&middot;</span>
-          <a href="#/bio" style={{ color: 'inherit', textDecoration: 'none', margin: '0 8px' }}>bio</a>
         </div>
       )}
     </div>

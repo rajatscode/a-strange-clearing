@@ -24,6 +24,9 @@ export default function NotesPage({ onBack }: { onBack: () => void }) {
           </p>
 
           <div className="space-y-10">
+            {notes.length === 0 && (
+              <p className="text-gray-700/40 text-xs tracking-[0.2em] font-mono">nothing here yet</p>
+            )}
             {notes.map((note) => {
               const isOpen = expandedId === note.id
               return (

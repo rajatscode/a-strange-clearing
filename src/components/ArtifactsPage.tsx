@@ -22,6 +22,9 @@ export default function ArtifactsPage({ onBack }: { onBack: () => void }) {
           </p>
 
           <div className="space-y-12">
+            {artifacts.length === 0 && (
+              <p className="text-gray-700/40 text-xs tracking-[0.2em] font-mono">nothing here yet</p>
+            )}
             {artifacts.map((artifact) => (
               <div key={artifact.id} className="group">
                 <h2 className="text-gray-300/80 text-base sm:text-lg font-light leading-relaxed">

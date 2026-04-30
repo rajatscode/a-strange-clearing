@@ -1129,21 +1129,27 @@ function drawKarmaOverlay(ctx: CanvasRenderingContext2D, w: number, h: number, w
 function drawStars(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
   for (let i = 0; i < world.stars.length; i++) {
     const star = world.stars[i]
-    if (!onScreen(star.x, star.y, cam, w, h)) continue
+    if (!onScreen(star.x, star.y, cam, w, h, 30)) continue
     const twinkle = 0.5 + Math.sin(world.time * 3 + star.phase) * 0.3 + Math.sin(world.time * 7 + star.phase * 2.3) * 0.2
     const alpha = star.brightness * twinkle
-    const r = (1.5 + star.brightness * 1.5) * world.scale
+    const r = (3 + star.brightness * 2) * world.scale
+
+    // Warm outer halo
+    ctx.beginPath()
+    ctx.arc(star.x, star.y, r * 6, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(45, 70%, 75%, ${alpha * 0.06})`
+    ctx.fill()
 
     // Soft glow
     ctx.beginPath()
-    ctx.arc(star.x, star.y, r * 4, 0, Math.PI * 2)
-    ctx.fillStyle = `hsla(200, 60%, 80%, ${alpha * 0.1})`
+    ctx.arc(star.x, star.y, r * 3, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(200, 60%, 80%, ${alpha * 0.15})`
     ctx.fill()
 
     // Core
     ctx.beginPath()
     ctx.arc(star.x, star.y, r, 0, Math.PI * 2)
-    ctx.fillStyle = `hsla(200, 70%, 90%, ${alpha * 0.8})`
+    ctx.fillStyle = `hsla(200, 70%, 92%, ${alpha * 0.9})`
     ctx.fill()
   }
 }
@@ -1240,11 +1246,12 @@ function drawDeadZones(ctx: CanvasRenderingContext2D, world: WorldState, cam: Ca
   for (let i = 0; i < world.entities.length; i++) {
     const e = world.entities[i]
     if (e.kind !== 'corruptor' || !e.alive) continue
-    const r = 100 * s
+    const pulse = 1 + Math.sin(world.time * 2.5 + e.phase) * 0.2
+    const r = 100 * s * pulse
     if (!onScreen(e.x, e.y, cam, w, h, r + 50)) continue
     ctx.beginPath()
     ctx.arc(e.x, e.y, r, 0, Math.PI * 2)
-    ctx.fillStyle = `rgba(8, 10, 6, ${0.06 * e.corruption})`
+    ctx.fillStyle = `rgba(8, 10, 6, ${(0.08 + Math.sin(world.time * 1.5 + e.phase) * 0.03) * e.corruption})`
     ctx.fill()
   }
 }

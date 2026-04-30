@@ -21,7 +21,7 @@ export default function BioPage({ onBack }: { onBack: () => void }) {
 
           <div className="flex items-center gap-5 mt-10">
             <a
-              href="mailto:rajat@rajatm.com"
+              href="mailto:r@jats.email"
               className="text-gray-600/60 hover:text-cyan-400/40 transition-colors duration-500"
               aria-label="Email"
             >

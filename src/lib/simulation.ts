@@ -699,9 +699,9 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
     player.aggression = Math.max(0, player.aggression - dt * 0.05)
   }
 
-  karma.beauty += (player.patience - 0.5) * dt * 0.018
-  karma.trust += (player.stillness - player.aggression) * dt * 0.012
-  karma.hostility += (player.aggression - 0.3) * dt * 0.015
+  karma.beauty += (player.patience - 0.5) * dt * 0.054
+  karma.trust += (player.stillness - player.aggression) * dt * 0.036
+  karma.hostility += (player.aggression - 0.3) * dt * 0.045
   karma.navigability = Math.max(0, Math.min(1,
     karma.beauty * 0.3 + karma.trust * 0.3 - karma.hostility * 0.2 - karma.corruption * 0.2 + 0.3
   ))
@@ -713,7 +713,7 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   karma.corruption = Math.max(0, Math.min(1, karma.corruption))
   karma.patience = player.patience
 
-  karma.hostility = Math.max(0, karma.hostility - dt * 0.004 * player.patience)
+  karma.hostility = Math.max(0, karma.hostility - dt * 0.012 * player.patience)
 
   if (player.stillness > 0.6) {
     player.energy = Math.min(1, player.energy + dt * 0.003)
@@ -1107,7 +1107,7 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
     if (e.y > state.worldHeight - margin) e.vy -= dt * 2
 
     if (e.kind === 'fragile') {
-      e.energy = Math.max(0, e.energy - dt * 0.006)
+      e.energy = Math.max(0, e.energy - dt * 0.015)
       if (e.energy <= 0) killEntity(state, e)
     }
   }
@@ -1183,21 +1183,22 @@ function rebuildConnectionLines(state: WorldState): void {
     }
   }
 
-  // Nourish lines from player
+  // Player-cooperator constellation lines — player participates in cooperation
   if (player.alive && player.stillness > 0.3) {
-    const hoverRadius = 80 * s
+    const playerCoopDist = 150 * s
     for (let i = 0; i < entities.length; i++) {
       const e = entities[i]
       if (!e.alive) continue
       if (e.kind !== 'fragile' && e.kind !== 'cooperator') continue
       const dx = e.x - player.x
       const dy = e.y - player.y
+      if (Math.abs(dx) > playerCoopDist || Math.abs(dy) > playerCoopDist) continue
       const dist = Math.sqrt(dx * dx + dy * dy)
-      if (dist < hoverRadius) {
-        const alpha = (1 - dist / hoverRadius) * 0.25 * player.stillness
+      if (dist < playerCoopDist) {
+        const alpha = (1 - dist / playerCoopDist) * 0.4 * player.stillness
         state.connectionLines.push({
           x1: player.x, y1: player.y, x2: e.x, y2: e.y,
-          alpha, kind: 'nourish',
+          alpha, kind: e.kind === 'cooperator' ? 'cooperate' : 'nourish',
         })
       }
     }
@@ -1229,14 +1230,25 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
       }
     }
 
-    if (nearby.length >= 2) {
+    // Count player as cluster participant if nearby, still, and patient
+    const playerDx = state.player.x - e.x
+    const playerDy = state.player.y - e.y
+    const playerInCluster = state.player.alive && state.player.stillness > 0.4 &&
+      Math.sqrt(playerDx * playerDx + playerDy * playerDy) < clusterRadius
+    const clusterSize = nearby.length + (playerInCluster ? 1 : 0)
+
+    if (clusterSize >= 2) {
       let cx = 0, cy = 0
       for (const idx of nearby) {
         cx += entities[idx].x
         cy += entities[idx].y
       }
-      cx /= nearby.length
-      cy /= nearby.length
+      if (playerInCluster) {
+        cx += state.player.x
+        cy += state.player.y
+      }
+      cx /= clusterSize
+      cy /= clusterSize
 
       addBeautyBloom(state, cx, cy, 280)
       state.lastBloomTime = state.time
@@ -1288,7 +1300,7 @@ function checkCooperatorClusters(state: WorldState, dt: number): void {
 }
 
 function checkSpawning(state: WorldState, dt: number, _viewportWidth: number, _viewportHeight: number): void {
-  const interval = 5
+  const interval = 3
   if (state.time - state.lastSpawnTime < interval) return
   if (Math.floor(state.time / interval) === Math.floor((state.time - dt) / interval)) return
 
@@ -1560,7 +1572,7 @@ function updateFlashes(state: WorldState, _dt: number): void {
 }
 
 function updateSmoothKarma(state: WorldState): void {
-  const lerpRate = 0.02 // ~2-3 second visual transition
+  const lerpRate = 0.06 // ~1 second visual transition
   const sk = state.smoothKarma
   const k = state.karma
   sk.beauty += (k.beauty - sk.beauty) * lerpRate
