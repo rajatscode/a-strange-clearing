@@ -321,15 +321,13 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   drawFog(ctx, w, h, world, cam)
   drawGroundScars(ctx, world, cam, w, h)
   drawDeadZones(ctx, world, cam, w, h)
-  drawParticlesForLayer(ctx, world, 0, cam, w, h)
+  drawAllParticles(ctx, world, cam, w, h)
   drawConnectionLines(ctx, world, w, h, cam)
-  drawParticlesForLayer(ctx, world, 1, cam, w, h)
   drawGrass(ctx, world, h, cam, w)
   drawFragments(ctx, world, cam, w, h)
   drawEntities(ctx, world, cam, w, h)
   drawDeathParticles(ctx, world, cam, w, h)
   drawBeautyBlooms(ctx, world, cam, w, h)
-  drawParticlesForLayer(ctx, world, 2, cam, w, h)
   drawNavNodes(ctx, world, cam, w, h)
   drawFalseBeacons(ctx, world, cam, w, h)
   drawRipples(ctx, world, world.scale, cam, w, h)
@@ -363,7 +361,6 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   }
 
   drawKarmaOverlay(ctx, w, h, world)
-  drawLookCloserNudge(ctx, w, h, world)
 }
 
 type Camera = { x: number; y: number }
@@ -403,13 +400,6 @@ function drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number, wor
     ctx.fillRect(0, b.y, w, h * b.frac + 2)
   }
 
-  // Subtle grain/noise — reduced from 200 to 80, using for loop
-  for (let i = 0; i < 80; i++) {
-    const nx = ((i * 7919 + world.time * 0.1) % 1) * w
-    const ny = ((i * 6271 + world.time * 0.07) % 1) * h
-    ctx.fillStyle = `hsla(200, 10%, 30%, ${0.015 + Math.sin(i + world.time * 0.5) * 0.01})`
-    ctx.fillRect(nx, ny, 2, 2)
-  }
 }
 
 function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState, cam: Camera) {
@@ -454,59 +444,54 @@ function drawFog(ctx: CanvasRenderingContext2D, w: number, h: number, world: Wor
   ctx.fillStyle = `hsla(${fogHue - 25}, ${fogSat}%, 8%, ${fogAlpha * 1.5})`
   ctx.fillRect(cx, cy + h * 0.9, w, h * 0.1)
 
-  // Drifting mist patches — radial gradients for soft atmospheric feel
+  // Drifting mist patches — simple alpha circles (no radial gradient)
   for (let i = 0; i < 2; i++) {
     const mx = cx + w * (0.1 + i * 0.4) + Math.sin(time * 0.04 + i * 1.7) * w * 0.12
     const my = cy + h * (0.3 + i * 0.15) + Math.cos(time * 0.025 + i * 2.3) * h * 0.05
     const mr = w * 0.25
-    const grad = ctx.createRadialGradient(mx, my, 0, mx, my, mr)
-    grad.addColorStop(0, `hsla(${fogHue + i * 15}, ${Math.max(0, fogSat - 5)}%, 22%, ${fogAlpha * 0.7})`)
-    grad.addColorStop(1, 'transparent')
-    ctx.fillStyle = grad
     ctx.beginPath()
     ctx.arc(mx, my, mr, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${fogHue + i * 15}, ${Math.max(0, fogSat - 5)}%, 22%, ${fogAlpha * 0.4})`
     ctx.fill()
   }
 }
 
-function drawParticlesForLayer(ctx: CanvasRenderingContext2D, world: WorldState, layer: number, cam: Camera, w: number, h: number) {
-  const { smoothKarma: karma } = world
-  const layerScale = layer === 0 ? 0.6 : layer === 1 ? 1.0 : 1.5
-  const alphaBase = layer === 0 ? 0.4 : layer === 1 ? 0.6 : 0.8
-  // Parallax: background layers move less with camera
-  const parallax = layer === 0 ? 0.3 : layer === 1 ? 0.7 : 1.0
-  const parallaxOffX = cam.x * (1 - parallax)
-  const parallaxOffY = cam.y * (1 - parallax)
+const LAYER_SCALE = [0.6, 1.0, 1.5]
+const LAYER_ALPHA = [0.4, 0.6, 0.8]
+const LAYER_PARALLAX = [0.3, 0.7, 1.0]
 
-  // Beauty: brighter particles, warmer hues
-  // Corruption: dimmer, colder/grayer
+function drawAllParticles(ctx: CanvasRenderingContext2D, world: WorldState, cam: Camera, w: number, h: number) {
+  const { smoothKarma: karma } = world
+
   const beautyBright = karma.beauty > 0.6 ? 1.0 + (karma.beauty - 0.6) * 1.5 : 1.0
   const corruptDim = karma.corruption > 0.5 ? 1.0 - (karma.corruption - 0.5) * 0.6 : 1.0
   const brightMult = beautyBright * corruptDim
 
-  // Hue shift: corruption → gray/cold (sat drop), beauty → warmer
   const satMult = karma.corruption > 0.5
-    ? 0.3 + (1 - karma.corruption) * 0.7  // desaturated
-    : 1.0 + (karma.beauty > 0.6 ? (karma.beauty - 0.6) * 0.5 : 0) // more vivid
+    ? 0.3 + (1 - karma.corruption) * 0.7
+    : 1.0 + (karma.beauty > 0.6 ? (karma.beauty - 0.6) * 0.5 : 0)
+
+  const sat = Math.round(60 * satMult)
+  const coreSat = Math.round(70 * satMult)
+  const skipCorrupt = karma.corruption > 0.5
 
   for (let i = 0; i < world.particles.length; i++) {
     const p = world.particles[i]
-    if (p.layer !== layer) continue
     if (!onScreen(p.x, p.y, cam, w, h)) continue
+    if (skipCorrupt && (i % 3 === 0)) continue
 
-    // Corruption: skip some particles (fewer visible)
-    if (karma.corruption > 0.5 && (i % 3 === 0)) continue
+    const layer = p.layer
+    const layerScale = LAYER_SCALE[layer]
+    const alphaBase = LAYER_ALPHA[layer]
+    const parallax = LAYER_PARALLAX[layer]
 
     const r = p.radius * layerScale
     const alpha = p.brightness * alphaBase * brightMult
 
     if (alpha < 0.05) continue
 
-    const sat = Math.round(60 * satMult)
-    const coreSat = Math.round(70 * satMult)
-
-    const px = p.x + parallaxOffX
-    const py = p.y + parallaxOffY
+    const px = p.x + cam.x * (1 - parallax)
+    const py = p.y + cam.y * (1 - parallax)
 
     const haloR = r * 5
     ctx.beginPath()
@@ -573,21 +558,8 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
     // Dead zone pre-computed in updateGrass (simulation.ts)
     const deadZone = blade.deadZone
 
-    // Gravitational shimmer: grass near hidden nav nodes glows warmer (use squared distance)
-    let navGlow = 0
-    const navRange = 100 * s
-    const navRangeSq = navRange * navRange
-    for (let n = 0; n < world.navNodes.length; n++) {
-      const node = world.navNodes[n]
-      const ndx = blade.x - node.x
-      if (Math.abs(ndx) > navRange) continue
-      const ndy = tipY - node.y
-      if (Math.abs(ndy) > navRange) continue
-      const ndistSq = ndx * ndx + ndy * ndy
-      if (ndistSq < navRangeSq) {
-        navGlow = Math.max(navGlow, (1 - Math.sqrt(ndistSq) / navRange) * 0.3)
-      }
-    }
+    // Nav glow pre-computed in updateGrass (simulation.ts)
+    const navGlow = blade.navGlow
 
     // Determine if this blade should be luminous based on karma
     const isLuminous = (blade.luminous || (blade.phase / (Math.PI * 2)) < luminousThreshold || navGlow > 0.1) && deadZone < 0.3
@@ -859,8 +831,9 @@ function drawEntities(ctx: CanvasRenderingContext2D, world: WorldState, cam: Cam
     const col = ENTITY_COLORS[e.kind]
     // Proximity factor: 1.0 when touching player, 0.0 when >= 150px away
     const dx = e.x - player.x, dy = e.y - player.y
-    const dist = Math.sqrt(dx * dx + dy * dy)
-    const prox = Math.max(0, 1 - dist / (150 * scale))
+    const distSq = dx * dx + dy * dy
+    const proxThresh = 150 * scale
+    const prox = distSq < proxThresh * proxThresh ? Math.max(0, 1 - Math.sqrt(distSq) / proxThresh) : 0
     const pulse = Math.sin(time * 2 + e.phase) * 0.15 + 1
 
     if (e.kind === 'wanderer') {
@@ -1266,27 +1239,6 @@ function drawFragments(ctx: CanvasRenderingContext2D, world: WorldState, cam: Ca
   }
 }
 
-function drawLookCloserNudge(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
-  if (world.time < 20) return
-  const anyRevealed = world.navNodes.some(n => n.revealed > 0.7)
-  if (anyRevealed) return
-  // Don't show if fragment system already showed "look closer" or any fragment is visible
-  if (world.shownFragments.has('look closer') || world.fragments.length > 0) return
-
-  // Fade in over 3 seconds after 20s mark
-  const fadeProgress = Math.min(1, (world.time - 20) / 3)
-  const alpha = 0.25 * fadeProgress
-
-  const dpr = window.devicePixelRatio || 1
-  const s = world.scale
-
-  ctx.save()
-  ctx.font = `${Math.round(11 * s)}px monospace`
-  ctx.textAlign = 'center'
-  ctx.fillStyle = `rgba(180, 200, 190, ${alpha})`
-  ctx.fillText('l o o k   c l o s e r', w / 2, h - 40 * dpr)
-  ctx.restore()
-}
 
 function drawMuteGlyph(ctx: CanvasRenderingContext2D, w: number, h: number, muted: boolean, hovering: boolean) {
   const dpr = window.devicePixelRatio || 1

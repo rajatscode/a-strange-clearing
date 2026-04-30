@@ -62,6 +62,7 @@ export type GrassBlade = {
   luminous: boolean
   hue: number
   deadZone: number
+  navGlow: number
 }
 
 export type Ripple = {
@@ -321,6 +322,7 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
       luminous: Math.random() < 0.15,
       hue: Math.random() < 0.4 ? 165 + Math.random() * 35 : 95 + Math.random() * 35,
       deadZone: 0,
+      navGlow: 0,
     })
   }
   grass.sort((a, b) => a.baseHeight - b.baseHeight)
@@ -1449,6 +1451,23 @@ function updateGrass(state: WorldState, _dt: number, _viewportHeight: number): v
       }
     }
     blade.deadZone = dz
+
+    // Nav glow: grass near hidden nav nodes glows warmer
+    let ng = 0
+    const navRange = 100 * s
+    const navRangeSq = navRange * navRange
+    for (let n = 0; n < state.navNodes.length; n++) {
+      const node = state.navNodes[n]
+      const ndx = blade.x - node.x
+      if (Math.abs(ndx) > navRange) continue
+      const ndy = (state.worldHeight - blade.baseHeight) - node.y
+      if (Math.abs(ndy) > navRange) continue
+      const ndistSq = ndx * ndx + ndy * ndy
+      if (ndistSq < navRangeSq) {
+        ng = Math.max(ng, (1 - Math.sqrt(ndistSq) / navRange) * 0.3)
+      }
+    }
+    blade.navGlow = ng
   }
 }
 
