@@ -253,11 +253,16 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   const isDead = !world.player.alive
 
   drawBackground(ctx, w, h, world)
+  drawStars(ctx, world)
   drawFog(ctx, w, h, world)
+  drawGroundScars(ctx, world)
   drawParticlesForLayer(ctx, world, 0)
+  drawConnectionLines(ctx, world)
   drawParticlesForLayer(ctx, world, 1)
   drawGrass(ctx, world, h)
   drawEntities(ctx, world)
+  drawDeathParticles(ctx, world)
+  drawBeautyBlooms(ctx, world)
   drawParticlesForLayer(ctx, world, 2)
   drawNavNodes(ctx, world)
   drawRipples(ctx, world, world.scale)
@@ -829,6 +834,93 @@ function drawKarmaOverlay(ctx: CanvasRenderingContext2D, w: number, h: number, w
     ctx.fillRect(w - edge, 0, edge, h)
     ctx.fillRect(0, 0, w, edge)
     ctx.fillRect(0, h - edge, w, edge)
+  }
+}
+
+function drawStars(ctx: CanvasRenderingContext2D, world: WorldState) {
+  for (let i = 0; i < world.stars.length; i++) {
+    const star = world.stars[i]
+    const twinkle = 0.5 + Math.sin(world.time * 3 + star.phase) * 0.3 + Math.sin(world.time * 7 + star.phase * 2.3) * 0.2
+    const alpha = star.brightness * twinkle
+    const r = (1.5 + star.brightness * 1.5) * world.scale
+
+    // Soft glow
+    ctx.beginPath()
+    ctx.arc(star.x, star.y, r * 4, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(200, 60%, 80%, ${alpha * 0.1})`
+    ctx.fill()
+
+    // Core
+    ctx.beginPath()
+    ctx.arc(star.x, star.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(200, 70%, 90%, ${alpha * 0.8})`
+    ctx.fill()
+  }
+}
+
+function drawDeathParticles(ctx: CanvasRenderingContext2D, world: WorldState) {
+  for (let i = 0; i < world.deathParticles.length; i++) {
+    const p = world.deathParticles[i]
+    if (p.alpha < 0.02) continue
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2)
+    ctx.fillStyle = `rgba(${p.r}, ${p.g}, ${p.b}, ${p.alpha})`
+    ctx.fill()
+  }
+}
+
+function drawBeautyBlooms(ctx: CanvasRenderingContext2D, world: WorldState) {
+  for (let i = 0; i < world.beautyBlooms.length; i++) {
+    const b = world.beautyBlooms[i]
+    if (b.alpha < 0.02) continue
+
+    // Outer ring
+    ctx.beginPath()
+    ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2)
+    ctx.strokeStyle = `hsla(${b.hue}, 65%, 65%, ${b.alpha * 0.5})`
+    ctx.lineWidth = 2 * world.scale
+    ctx.stroke()
+
+    // Inner fill
+    ctx.beginPath()
+    ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${b.hue}, 55%, 55%, ${b.alpha * 0.08})`
+    ctx.fill()
+  }
+}
+
+function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState) {
+  const colors: Record<string, string> = {
+    cooperate: '160, 70%, 60%',
+    hunt: '20, 70%, 55%',
+    corrupt: '90, 30%, 45%',
+    nourish: '180, 65%, 65%',
+  }
+
+  for (let i = 0; i < world.connectionLines.length; i++) {
+    const line = world.connectionLines[i]
+    if (line.alpha < 0.02) continue
+    ctx.beginPath()
+    ctx.moveTo(line.x1, line.y1)
+    ctx.lineTo(line.x2, line.y2)
+    ctx.strokeStyle = `hsla(${colors[line.kind]}, ${line.alpha})`
+    ctx.lineWidth = 1.5 * world.scale
+    ctx.stroke()
+  }
+}
+
+function drawGroundScars(ctx: CanvasRenderingContext2D, world: WorldState) {
+  for (let i = 0; i < world.groundScars.length; i++) {
+    const scar = world.groundScars[i]
+    if (scar.alpha < 0.02) continue
+    ctx.beginPath()
+    ctx.arc(scar.x, scar.y, scar.radius, 0, Math.PI * 2)
+    if (scar.dark) {
+      ctx.fillStyle = `rgba(10, 12, 8, ${scar.alpha * 0.4})`
+    } else {
+      ctx.fillStyle = `hsla(170, 50%, 60%, ${scar.alpha * 0.15})`
+    }
+    ctx.fill()
   }
 }
 
