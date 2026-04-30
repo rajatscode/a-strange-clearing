@@ -718,7 +718,8 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'],
   const { x, y, aura, energy } = player
   const pulse = Math.sin(time * 2.5) * 0.12 + 1
   const breathe = Math.sin(time * 1.2) * 0.08 + 1
-  const energyAlpha = 0.3 + energy * 0.7
+  const clampedEnergy = Math.min(energy, 3.0)
+  const energyAlpha = energy < 0.2 ? 0.15 + energy * 2.5 : 0.3 + Math.min(energy, 1) * 0.7
 
   // Karma-responsive player color with entity hover hint
   let hueShift = 0, satShift = 0, litShift = 0
@@ -765,7 +766,9 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'],
   ctx.fill()
 
   // Core blob — organic wobble (20 steps)
-  const coreR = (8 + energy * 5) * scale
+  // Quadratic growth: tiny at low energy, enormous at high energy
+  // energy 0.1 → 4.3px, energy 0.5 → 11.5px, energy 1.0 → 34px, energy 2.0 → 124px, energy 3.0 → 274px
+  const coreR = (4 + clampedEnergy * clampedEnergy * 30) * scale
   ctx.beginPath()
   const steps = 20
   for (let i = 0; i <= steps; i++) {

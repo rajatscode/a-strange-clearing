@@ -495,10 +495,15 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
   if (idx >= 0) {
     const e = state.entities[idx]
 
+    // Too weak to interact meaningfully
+    if (player.energy < 0.15 && e.kind !== 'defector') {
+      return { type: 'ripple' }
+    }
+
     if (e.kind === 'fragile') {
       if (player.aggression >= 0.4) {
         // HARVEST — extractive path: fast energy, karmic cost
-        player.energy = Math.min(1, player.energy + 0.2)
+        player.energy = Math.min(3.0, player.energy + 0.2)
         player.glowBoost = Math.min(1, player.glowBoost + 0.3)
         e.energy = Math.max(0, e.energy - 0.4)
         e.radius = Math.max(2 * state.scale, e.radius * 0.6)  // visibly shrinks
@@ -516,8 +521,9 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
         addFlash(state, e.x, e.y, 80, 120, 200, 60 * state.scale)  // cold blue flash
         return { type: 'fragile_harvest', entityIndex: idx }
       } else if (player.energy > 0.1) {
-        // NOURISH — generous path
-        const transfer = Math.min(0.15, player.energy - 0.05)
+        // NOURISH — generous path (stronger at high energy)
+        const powerMult = Math.min(2, player.energy)
+        const transfer = Math.min(0.15 * powerMult, player.energy - 0.05)
         player.energy -= transfer
         e.energy = Math.min(1, e.energy + transfer * 1.5)
         e.trust = Math.min(1, e.trust + 0.1)
@@ -535,7 +541,7 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
     if (e.kind === 'cooperator') {
       if (player.aggression >= 0.4) {
         // DRAIN — most extractive act: high reward, devastating karmic cost
-        player.energy = Math.min(1, player.energy + 0.3)
+        player.energy = Math.min(3.0, player.energy + 0.3)
         player.glowBoost = Math.min(1, player.glowBoost + 0.4)
         e.energy = Math.max(0, e.energy - 0.3)
         e.trust = Math.max(0, e.trust - 0.4)
@@ -598,7 +604,8 @@ export function handleWorldClick(state: WorldState, x: number, y: number): Click
       if (player.energy < cost) return { type: 'none' }
       player.energy -= cost
 
-      const successChance = 0.3 + player.patience * 0.3 + karma.beauty * 0.2 + karma.trust * 0.2
+      const energyBonus = Math.max(0, player.energy - 1) * 0.15  // high energy improves cleanse
+      const successChance = 0.3 + player.patience * 0.3 + karma.beauty * 0.2 + karma.trust * 0.2 + energyBonus
       if (Math.random() < successChance) {
         e.corruption = Math.max(0, e.corruption - 0.4)
         e.hostility = Math.max(0, e.hostility - 0.3)
@@ -752,13 +759,13 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
     return
   }
 
-  // Player follows mouse
-  const lerpFactor = 0.12
+  // Player follows mouse — sluggish when low energy
+  const lerpFactor = player.energy < 0.2 ? 0.04 : 0.12
   player.x += (player.targetX - player.x) * lerpFactor
   player.y += (player.targetY - player.y) * lerpFactor
 
   const s = state.scale
-  player.aura = (25 + Math.sin(state.time * 2) * 8 + player.energy * 15) * s
+  player.aura = (25 + Math.sin(state.time * 2) * 8 + Math.min(player.energy, 1) * 15 + Math.max(0, player.energy - 1) * 30) * s
 
   state.mouseSmoothed += (state.mouseSpeed - state.mouseSmoothed) * 0.05
 
@@ -795,7 +802,12 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   karma.hostility = Math.max(0, karma.hostility - dt * 0.012 * player.patience)
 
   if (player.stillness > 0.6) {
-    player.energy = Math.min(1, player.energy + dt * 0.003)
+    player.energy = Math.min(1, player.energy + dt * 0.003) // stillness regen caps at 1.0
+  }
+
+  // High energy maintenance cost — bigger = faster drain
+  if (player.energy > 1.0) {
+    player.energy -= dt * 0.01 * player.energy
   }
 
   // Extra energy drain in corruption zones
@@ -1081,10 +1093,15 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
           seekY += ny * 0.1 * e.trust
         }
       } else if (e.kind === 'fragile') {
-        if (player.aggression > 0.4 && dist < 180 * s) {
+        if (player.energy > 1.5 && dist < 220 * s) {
+          // Fragile flee from overwhelming presence
+          const fearMult = (player.energy - 1.5) * 0.4
+          seekX -= nx * fearMult
+          seekY -= ny * fearMult
+        } else if (player.aggression > 0.4 && dist < 180 * s) {
           seekX -= nx * 0.4
           seekY -= ny * 0.4
-        } else if (player.stillness > 0.5 && dist < 150 * s) {
+        } else if (player.energy >= 0.2 && player.stillness > 0.5 && dist < 150 * s) {
           seekX += nx * 0.08
           seekY += ny * 0.08
         }
@@ -1109,7 +1126,12 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
           }
         }
       } else if (e.kind === 'defector') {
-        if (dist < 200 * s) {
+        if (player.energy > 1.5 && dist < 300 * s) {
+          // Defectors are ATTRACTED to power — drawn to feast
+          const greedMult = (player.energy - 1.5) * 0.3
+          seekX += nx * greedMult
+          seekY += ny * greedMult
+        } else if (dist < 200 * s) {
           seekX -= nx * 0.25
           seekY -= ny * 0.25
         }
