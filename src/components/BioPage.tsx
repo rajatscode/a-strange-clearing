@@ -21,7 +21,7 @@ export default function BioPage({ onBack }: { onBack: () => void }) {
 
           <div className="flex items-center gap-5 mt-10">
             <a
-              href="mailto:rajat@example.com"
+              href="mailto:rajat@rajatm.com"
               className="text-gray-600/60 hover:text-cyan-400/40 transition-colors duration-500"
               aria-label="Email"
             >
@@ -30,7 +30,7 @@ export default function BioPage({ onBack }: { onBack: () => void }) {
               </svg>
             </a>
             <a
-              href="https://github.com/rajat"
+              href="https://github.com/rajatscode"
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-600/60 hover:text-cyan-400/40 transition-colors duration-500"
