@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useState } from 'react'
 import type { WorldState, Entity } from '../lib/simulation'
 import { createWorld, updateWorld, addRipple, addFlash, findNavNodeAt, handleWorldClick, ENTITY_COLORS } from '../lib/simulation'
 import { AudioEngine } from './AudioEngine'
@@ -12,6 +12,7 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
   const muteHover = useRef(false)
   const onNavigateRef = useRef(onNavigate)
   onNavigateRef.current = onNavigate
+  const [canvasFailed, setCanvasFailed] = useState(false)
 
   const handlePointerMove = useCallback((clientX: number, clientY: number) => {
     const world = worldRef.current
@@ -158,7 +159,10 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     if (!canvas) return
 
     const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!ctx) {
+      setCanvasFailed(true)
+      return
+    }
 
     let alive = true
 
@@ -262,6 +266,18 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
       audioRef.current.setMuffled(!!muffled)
     }
   }, [muffled])
+
+  if (canvasFailed) {
+    return (
+      <div className="fixed inset-0 w-full h-full bg-[#050608] flex flex-col items-center justify-center gap-6">
+        <nav className="flex gap-8">
+          <a href="#/notes" className="text-gray-500/60 hover:text-cyan-400/40 transition-colors duration-500 text-sm font-mono tracking-widest">notes</a>
+          <a href="#/artifacts" className="text-gray-500/60 hover:text-cyan-400/40 transition-colors duration-500 text-sm font-mono tracking-widest">artifacts</a>
+          <a href="#/bio" className="text-gray-500/60 hover:text-cyan-400/40 transition-colors duration-500 text-sm font-mono tracking-widest">bio</a>
+        </nav>
+      </div>
+    )
+  }
 
   return (
     <canvas

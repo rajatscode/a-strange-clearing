@@ -215,7 +215,8 @@ export const ENTITY_COLORS: Record<EntityKind, { r: number; g: number; b: number
 function spawnEntities(width: number, height: number, scale: number): Entity[] {
   const area = width * height
   const baseCount = 30
-  const countScale = Math.max(0.5, Math.min(1.5, area / (1920 * 1080 * 4)))
+  const isSmallViewport = typeof window !== 'undefined' && window.innerWidth < 400
+  const countScale = Math.max(0.5, Math.min(1.5, area / (1920 * 1080 * 4))) * (isSmallViewport ? 0.5 : 1)
   const total = Math.floor(baseCount * countScale)
 
   const kinds: EntityKind[] = []
@@ -296,7 +297,8 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
   const area = worldWidth * worldHeight
   const densityScale = Math.min(1, area / (1920 * 1080 * 4))
   const isMobile = 'ontouchstart' in window || window.innerWidth < 768
-  const mobileScale = isMobile ? 0.6 : 1
+  const isSmallViewport = window.innerWidth < 400
+  const mobileScale = isSmallViewport ? 0.35 : isMobile ? 0.6 : 1
   const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const motionScale = reducedMotion ? 0.5 : 1
   const grassCount = Math.floor((180 + mood.grassDensity * 70) * densityScale * mobileScale)
