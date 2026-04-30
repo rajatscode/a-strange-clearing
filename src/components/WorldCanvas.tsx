@@ -855,10 +855,10 @@ function drawCorruptor(ctx: CanvasRenderingContext2D, e: Entity, col: { r: numbe
 
   // Pulsing dark aura — large, unmistakable
   const auraPulse = 1 + Math.sin(time * 2 + e.phase) * 0.25
-  const auraR = r * 7 * auraPulse
+  const auraR = e.radius * 4 * auraPulse
   ctx.beginPath()
   ctx.arc(e.x, e.y, auraR, 0, Math.PI * 2)
-  ctx.fillStyle = `rgba(20, 25, 15, ${alpha * 0.12})`
+  ctx.fillStyle = `rgba(40, 50, 30, ${0.12 * e.corruption})`
   ctx.fill()
 
   // Sickly halo with distortion
@@ -1043,9 +1043,8 @@ function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState, w
     ctx.beginPath()
     ctx.moveTo(line.x1, line.y1)
     ctx.lineTo(line.x2, line.y2)
-    const lineAlpha = line.kind === 'hunt' ? Math.min(1, line.alpha * 1.8 + 0.15) : line.alpha
-    ctx.strokeStyle = `hsla(${colors[line.kind]}, ${lineAlpha})`
-    ctx.lineWidth = (line.kind === 'hunt' ? 3.0 : line.kind === 'corrupt' ? 2.0 : 1.5) * world.scale
+    ctx.strokeStyle = `hsla(${colors[line.kind]}, ${line.alpha})`
+    ctx.lineWidth = (line.kind === 'hunt' ? 2.0 : line.kind === 'corrupt' ? 1.5 : 1.0) * world.scale
     ctx.stroke()
   }
 }

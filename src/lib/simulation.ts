@@ -171,6 +171,7 @@ export type WorldState = {
     trust: number
     hostility: number
     corruption: number
+    navigability: number
   }
   mouseSpeed: number
   mouseSmoothed: number
@@ -190,13 +191,13 @@ export const ENTITY_COLORS: Record<EntityKind, { r: number; g: number; b: number
   wanderer:   { r: 100, g: 200, b: 220, hue: 190 },
   fragile:    { r: 220, g: 180, b: 120, hue: 35 },
   cooperator: { r: 80,  g: 220, b: 180, hue: 160 },
-  defector:   { r: 240, g: 100, b: 60,  hue: 15 },
+  defector:   { r: 240, g: 80,  b: 60,  hue: 10 },
   corruptor:  { r: 130, g: 150, b: 110, hue: 90 },
 }
 
 function spawnEntities(width: number, height: number, scale: number): Entity[] {
   const area = width * height
-  const baseCount = 32
+  const baseCount = 30
   const countScale = Math.max(0.5, Math.min(1.5, area / (1920 * 1080 * 4)))
   const total = Math.floor(baseCount * countScale)
 
@@ -369,6 +370,7 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
       trust: karma.trust,
       hostility: karma.hostility,
       corruption: karma.corruption,
+      navigability: karma.navigability,
     },
     mouseSpeed: 0,
     mouseSmoothed: 0,
@@ -903,7 +905,10 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
             e.energy = Math.min(1, e.energy + dt * 0.06)
             e.radius = Math.min(e.radius * 1.001, 15 * state.scale)
             karma.hostility = Math.min(1, karma.hostility + dt * 0.003)
-            if (other.energy <= 0) killEntity(state, other)
+            if (other.energy <= 0) {
+              killEntity(state, other)
+              addFlash(state, e.x, e.y, 240, 60, 40, 60 * s)
+            }
           }
         }
       } else if (e.kind === 'corruptor') {
@@ -917,9 +922,13 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
           const ody = other.y - e.y
           const odist = Math.sqrt(odx * odx + ody * ody)
           if (odist < 120 * s) {
+            const prevCorruption = other.corruption
             other.corruption = Math.min(1, other.corruption + dt * 0.018 * e.corruption)
             other.beauty = Math.max(0, other.beauty - dt * 0.008)
             state.worldEvents.corruptionSpread = true
+            if (prevCorruption < 0.1 && other.corruption >= 0.1) {
+              addFlash(state, other.x, other.y, 100, 140, 70, 50 * s)
+            }
           }
         }
       }
@@ -948,7 +957,7 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
     if (e.y > state.worldHeight - margin) e.vy -= dt * 2
 
     if (e.kind === 'fragile') {
-      e.energy = Math.max(0, e.energy - dt * 0.003)
+      e.energy = Math.max(0, e.energy - dt * 0.006)
       if (e.energy <= 0) killEntity(state, e)
     }
   }
@@ -990,7 +999,7 @@ function rebuildConnectionLines(state: WorldState): void {
         const dy = other.y - e.y
         const dist = Math.sqrt(dx * dx + dy * dy)
         if (dist < 120 * s) {
-          const alpha = (1 - dist / (120 * s)) * 0.4 * e.hostility
+          const alpha = Math.max(0.3, (1 - dist / (120 * s)) * 0.5 * e.hostility)
           state.connectionLines.push({
             x1: e.x, y1: e.y, x2: other.x, y2: other.y,
             alpha, kind: 'hunt',
@@ -1008,7 +1017,7 @@ function rebuildConnectionLines(state: WorldState): void {
         const dy = other.y - e.y
         const dist = Math.sqrt(dx * dx + dy * dy)
         if (dist < 100 * s) {
-          const alpha = (1 - dist / (100 * s)) * 0.25 * e.corruption
+          const alpha = Math.max(0.2, (1 - dist / (100 * s)) * 0.3 * e.corruption)
           state.connectionLines.push({
             x1: e.x, y1: e.y, x2: other.x, y2: other.y,
             alpha, kind: 'corrupt',
@@ -1040,7 +1049,7 @@ function rebuildConnectionLines(state: WorldState): void {
 }
 
 function checkCooperatorClusters(state: WorldState, dt: number): void {
-  if (state.time - state.lastBloomTime < 15) return
+  if (state.time - state.lastBloomTime < 8) return
   const checkInterval = 3
   if (Math.floor(state.time / checkInterval) === Math.floor((state.time - dt) / checkInterval)) return
 
@@ -1360,6 +1369,7 @@ function updateSmoothKarma(state: WorldState): void {
   sk.trust += (k.trust - sk.trust) * lerpRate
   sk.hostility += (k.hostility - sk.hostility) * lerpRate
   sk.corruption += (k.corruption - sk.corruption) * lerpRate
+  sk.navigability += (k.navigability - sk.navigability) * lerpRate
 }
 
 function periodicSave(state: WorldState, dt: number): void {
