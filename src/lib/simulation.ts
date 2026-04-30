@@ -212,12 +212,13 @@ export const ENTITY_COLORS: Record<EntityKind, { r: number; g: number; b: number
   corruptor:  { r: 130, g: 150, b: 110, hue: 90 },
 }
 
-function spawnEntities(width: number, height: number, scale: number): Entity[] {
+function spawnEntities(width: number, height: number, scale: number, totalVisits: number = 0): Entity[] {
   const area = width * height
   const baseCount = 40
   const isSmallViewport = typeof window !== 'undefined' && window.innerWidth < 400
   const areaScale = Math.max(0.6, Math.min(2.0, area / (1920 * 1080 * 6)))
   const total = Math.floor(baseCount * areaScale * (isSmallViewport ? 0.5 : 1))
+  const visitOffset = (totalVisits * 0.137) % 1
 
   const kinds: EntityKind[] = []
   const dist = [
@@ -239,8 +240,8 @@ function spawnEntities(width: number, height: number, scale: number): Entity[] {
     entities.push({
       id: `${kind}-${i}`,
       kind,
-      x: Math.random() * width * 0.8 + width * 0.1,
-      y: Math.random() * height * 0.6 + height * 0.2,
+      x: ((Math.random() + visitOffset) % 1) * width * 0.8 + width * 0.1,
+      y: ((Math.random() + visitOffset * 0.7) % 1) * height * 0.6 + height * 0.2,
       vx: (Math.random() - 0.5) * 0.5,
       vy: (Math.random() - 0.5) * 0.3,
       radius: radiusBase * scale,
@@ -337,7 +338,7 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
     })
   }
 
-  const entities = spawnEntities(worldWidth, worldHeight, scale)
+  const entities = spawnEntities(worldWidth, worldHeight, scale, karma.totalVisits)
   const navNodes = createNavNodes(worldWidth, worldHeight, karma)
 
   // Player starts at center of world

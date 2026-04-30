@@ -329,7 +329,7 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   if (isDead) {
     drawEmber(ctx, world)
   } else {
-    drawPlayerTrail(ctx, world.player, world.scale)
+    drawPlayerTrail(ctx, world.player, world.scale, world.smoothKarma)
     // Find nearest entity for cursor hint
     let hoverKind: string | null = null
     const px = world.player.x, py = world.player.y
@@ -664,8 +664,9 @@ function drawFlashes(ctx: CanvasRenderingContext2D, world: WorldState, scale: nu
   }
 }
 
-function drawPlayerTrail(ctx: CanvasRenderingContext2D, player: WorldState['player'], scale: number) {
+function drawPlayerTrail(ctx: CanvasRenderingContext2D, player: WorldState['player'], scale: number, sk: WorldState['smoothKarma']) {
   if (player.trail.length < 2) return
+  const trailHue = 165 + sk.corruption * 45 - sk.beauty * 15
 
   // Draw trail segments with per-segment alpha fading
   for (let i = 1; i < player.trail.length; i++) {
@@ -676,7 +677,7 @@ function drawPlayerTrail(ctx: CanvasRenderingContext2D, player: WorldState['play
     ctx.beginPath()
     ctx.moveTo(prev.x, prev.y)
     ctx.lineTo(t.x, t.y)
-    ctx.strokeStyle = `hsla(180, 65%, 65%, ${t.alpha * 0.4})`
+    ctx.strokeStyle = `hsla(${trailHue}, 65%, 65%, ${t.alpha * 0.4})`
     ctx.lineWidth = 3 * t.alpha * scale
     ctx.stroke()
   }
