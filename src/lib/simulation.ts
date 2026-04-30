@@ -39,6 +39,7 @@ export type Entity = {
   beauty: number
   alive: boolean
   phase: number
+  labelShown?: boolean
 }
 
 export type Particle = {
@@ -239,7 +240,7 @@ function spawnEntities(width: number, height: number, scale: number, totalVisits
   const entities: Entity[] = []
   for (let i = 0; i < kinds.length; i++) {
     const kind = kinds[i]
-    const radiusBase = kind === 'fragile' ? 4 : kind === 'cooperator' ? 8 : kind === 'corruptor' ? 9 : kind === 'defector' ? 10 : 6
+    const radiusBase = kind === 'fragile' ? 4 : kind === 'cooperator' ? 11 : kind === 'corruptor' ? 13 : kind === 'defector' ? 11 : 7
     entities.push({
       id: `${kind}-${i}`,
       kind,

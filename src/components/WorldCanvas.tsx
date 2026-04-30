@@ -692,6 +692,16 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: WorldState['player'],
   const sat = Math.round(Math.max(30, 85 - sk.corruption * 30 + satShift))
   const lit = Math.round(Math.max(50, Math.min(95, 82 - sk.corruption * 15 + sk.beauty * 5 + litShift)))
 
+  // Patience/kindness glow — warm aura that grows with gentle behavior
+  const kindGlow = Math.max(0, player.patience - 0.3) * (1 - player.aggression) * energy
+  if (kindGlow > 0.05) {
+    const kindR = aura * (4 + kindGlow * 6)
+    ctx.beginPath()
+    ctx.arc(x, y, kindR, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${hue - 10}, ${Math.min(90, sat + 10)}%, ${Math.min(85, lit - 5)}%, ${kindGlow * 0.06})`
+    ctx.fill()
+  }
+
   // Outer aura
   const outerR = aura * pulse * 3.5
   ctx.beginPath()
@@ -849,6 +859,21 @@ function drawEntities(ctx: CanvasRenderingContext2D, world: WorldState, cam: Cam
       drawDefector(ctx, e, col, pulse, time, scale, prox)
     } else if (e.kind === 'corruptor') {
       drawCorruptor(ctx, e, col, pulse, time, scale, prox)
+    }
+
+    // Hover label: when player is close and still, show entity name once
+    if (prox > 0.5 && player.stillness > 0.5 && !e.labelShown) {
+      const labelAlpha = (prox - 0.5) * 0.4 * player.stillness
+      if (labelAlpha > 0.02) {
+        const label = e.kind === 'cooperator' ? 'friend' : e.kind === 'defector' ? 'hunter' : e.kind === 'corruptor' ? 'blight' : e.kind === 'fragile' ? 'fragile' : 'drifter'
+        ctx.save()
+        ctx.font = `${Math.round(9 * scale)}px monospace`
+        ctx.textAlign = 'center'
+        ctx.fillStyle = `rgba(${col.r}, ${col.g}, ${col.b}, ${labelAlpha})`
+        ctx.fillText(label, e.x, e.y - e.radius * 2 - 4 * scale)
+        ctx.restore()
+        if (prox > 0.7 && player.stillness > 0.7) e.labelShown = true
+      }
     }
   }
 }
