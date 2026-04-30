@@ -64,27 +64,37 @@ export default function App() {
 
   return (
     <div className="w-full h-full bg-[#050608]">
-      <div
-        style={{
-          opacity,
-          transition: 'opacity 400ms ease-in-out',
-          width: '100%',
-          height: '100%',
-        }}
-      >
-        {displayRoute === 'clearing' && (
-          <WorldCanvas onNavigate={handleNavigate} />
-        )}
-        {displayRoute === 'notes' && (
-          <NotesPage onBack={handleBack} />
-        )}
-        {displayRoute === 'artifacts' && (
-          <ArtifactsPage onBack={handleBack} />
-        )}
-        {displayRoute === 'bio' && (
-          <BioPage onBack={handleBack} />
-        )}
+      {/* WorldCanvas is ALWAYS mounted to preserve world state across navigation */}
+      <div style={{
+        visibility: displayRoute === 'clearing' ? 'visible' : 'hidden',
+        position: displayRoute === 'clearing' ? 'relative' : 'fixed',
+        width: '100%',
+        height: '100%',
+        opacity: displayRoute === 'clearing' ? opacity : 0,
+        transition: 'opacity 400ms ease-in-out',
+      }}>
+        <WorldCanvas onNavigate={handleNavigate} />
       </div>
+      {displayRoute !== 'clearing' && (
+        <div
+          style={{
+            opacity,
+            transition: 'opacity 400ms ease-in-out',
+            width: '100%',
+            height: '100%',
+          }}
+        >
+          {displayRoute === 'notes' && (
+            <NotesPage onBack={handleBack} />
+          )}
+          {displayRoute === 'artifacts' && (
+            <ArtifactsPage onBack={handleBack} />
+          )}
+          {displayRoute === 'bio' && (
+            <BioPage onBack={handleBack} />
+          )}
+        </div>
+      )}
     </div>
   )
 }
