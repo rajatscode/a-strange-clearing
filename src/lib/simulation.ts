@@ -259,22 +259,23 @@ function createNavNodes(width: number, height: number, karma: KarmaState): NavNo
   const firstVisit = karma.totalVisits <= 1
   const margin = 0.15
 
+  // First visit: nodes placed close to center so they're discoverable within 15-30s
   const noteX = firstVisit
-    ? width * (0.3 + Math.random() * 0.1)
+    ? width * (0.40 + Math.random() * 0.06)
     : width * (margin + Math.random() * (1 - margin * 2))
   const noteY = firstVisit
-    ? height * (0.35 + Math.random() * 0.1)
+    ? height * (0.38 + Math.random() * 0.08)
     : height * (0.2 + Math.random() * 0.4)
 
   const artX = firstVisit
-    ? width * (0.65 + Math.random() * 0.1)
+    ? width * (0.55 + Math.random() * 0.06)
     : width * (margin + Math.random() * (1 - margin * 2))
   const artY = firstVisit
-    ? height * (0.4 + Math.random() * 0.1)
+    ? height * (0.42 + Math.random() * 0.08)
     : height * (0.2 + Math.random() * 0.4)
 
-  const bioX = width * (0.45 + Math.random() * 0.1)
-  const bioY = height * (0.45 + Math.random() * 0.1)
+  const bioX = width * (0.47 + Math.random() * 0.06)
+  const bioY = height * (0.55 + Math.random() * 0.06)
 
   return [
     { kind: 'note', x: noteX, y: noteY, baseX: noteX, baseY: noteY, revealed: firstVisit ? 0.15 : 0, phase: Math.random() * Math.PI * 2, route: '#/notes' },

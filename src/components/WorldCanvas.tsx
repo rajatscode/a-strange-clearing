@@ -1113,6 +1113,8 @@ function drawLookCloserNudge(ctx: CanvasRenderingContext2D, w: number, h: number
   if (world.time < 20) return
   const anyRevealed = world.navNodes.some(n => n.revealed > 0.7)
   if (anyRevealed) return
+  // Don't show if fragment system already showed "look closer" or any fragment is visible
+  if (world.shownFragments.has('look closer') || world.fragments.length > 0) return
 
   // Fade in over 3 seconds after 20s mark
   const fadeProgress = Math.min(1, (world.time - 20) / 3)
