@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react'
 import type { WorldState, Entity } from '../lib/simulation'
-import { createWorld, updateWorld, addRipple, findNavNodeAt, handleWorldClick, ENTITY_COLORS } from '../lib/simulation'
+import { createWorld, updateWorld, addRipple, addFlash, findNavNodeAt, handleWorldClick, ENTITY_COLORS } from '../lib/simulation'
 import { AudioEngine } from './AudioEngine'
 
 export default function WorldCanvas({ onNavigate }: { onNavigate?: (route: string) => void }) {
@@ -10,8 +10,10 @@ export default function WorldCanvas({ onNavigate }: { onNavigate?: (route: strin
   const audioRef = useRef<AudioEngine | null>(null)
   const clickedThisFrame = useRef(false)
   const muteHover = useRef(false)
+  const onNavigateRef = useRef(onNavigate)
+  onNavigateRef.current = onNavigate
 
-  const handleMouseMove = useCallback((e: MouseEvent) => {
+  const handlePointerMove = useCallback((clientX: number, clientY: number) => {
     const world = worldRef.current
     if (!world) return
 
@@ -21,32 +23,43 @@ export default function WorldCanvas({ onNavigate }: { onNavigate?: (route: strin
     }
 
     const now = performance.now()
-    const dx = e.clientX - lastMouseRef.current.x
-    const dy = e.clientY - lastMouseRef.current.y
+    const dx = clientX - lastMouseRef.current.x
+    const dy = clientY - lastMouseRef.current.y
     const elapsed = now - lastMouseRef.current.time
     if (elapsed > 0) {
       world.mouseSpeed = Math.sqrt(dx * dx + dy * dy) / Math.max(elapsed, 1) * 16
     }
 
-    lastMouseRef.current.x = e.clientX
-    lastMouseRef.current.y = e.clientY
+    lastMouseRef.current.x = clientX
+    lastMouseRef.current.y = clientY
     lastMouseRef.current.time = now
 
     const dpr = window.devicePixelRatio || 1
-    world.player.targetX = e.clientX * dpr
-    world.player.targetY = e.clientY * dpr
+    world.player.targetX = clientX * dpr
+    world.player.targetY = clientY * dpr
 
     // Check mute button hover
     const canvas = canvasRef.current
     if (canvas) {
       const bx = canvas.width / dpr - 36
       const by = canvas.height / dpr - 36
-      const md = Math.sqrt((e.clientX - bx) ** 2 + (e.clientY - by) ** 2)
+      const md = Math.sqrt((clientX - bx) ** 2 + (clientY - by) ** 2)
       muteHover.current = md < 20
     }
   }, [])
 
-  const handleClick = useCallback((e: MouseEvent) => {
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    handlePointerMove(e.clientX, e.clientY)
+  }, [handlePointerMove])
+
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+    e.preventDefault()
+    if (e.touches.length > 0) {
+      handlePointerMove(e.touches[0].clientX, e.touches[0].clientY)
+    }
+  }, [handlePointerMove])
+
+  const handlePointerClick = useCallback((clientX: number, clientY: number) => {
     const world = worldRef.current
     if (!world) return
 
@@ -62,20 +75,20 @@ export default function WorldCanvas({ onNavigate }: { onNavigate?: (route: strin
     if (canvas) {
       const bx = canvas.width / dpr - 36
       const by = canvas.height / dpr - 36
-      const md = Math.sqrt((e.clientX - bx) ** 2 + (e.clientY - by) ** 2)
+      const md = Math.sqrt((clientX - bx) ** 2 + (clientY - by) ** 2)
       if (md < 20) {
         audioRef.current?.toggle()
         return
       }
     }
 
-    const cx = e.clientX * dpr
-    const cy = e.clientY * dpr
+    const cx = clientX * dpr
+    const cy = clientY * dpr
 
     // Check nav node click
     const navNode = findNavNodeAt(world, cx, cy)
-    if (navNode && onNavigate) {
-      onNavigate(navNode.route)
+    if (navNode && onNavigateRef.current) {
+      onNavigateRef.current(navNode.route)
       return
     }
 
@@ -88,23 +101,46 @@ export default function WorldCanvas({ onNavigate }: { onNavigate?: (route: strin
         addRipple(world, cx, cy)
         break
       case 'fragile_nourish':
+        addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 220, 180, 80)  // warm amber
+        break
       case 'cooperator_exchange':
         addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 80, 230, 190)  // bright cyan-green
         break
       case 'corruptor_cleanse_success':
         addRipple(world, cx, cy)
         addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 200, 240, 255, 100)  // white-cyan bloom
         break
       case 'corruptor_cleanse_fail':
+        addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 100, 130, 70)  // sickly green
+        break
       case 'defector_risk':
         addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 220, 100, 60)  // red-amber
         break
       case 'ember_revive':
         addRipple(world, cx, cy)
         addRipple(world, cx, cy)
+        addFlash(world, cx, cy, 255, 200, 100, 90)  // warm bloom
         break
     }
-  }, [onNavigate])
+  }, [])
+
+  const handleClick = useCallback((e: MouseEvent) => {
+    handlePointerClick(e.clientX, e.clientY)
+  }, [handlePointerClick])
+
+  const handleTouchStart = useCallback((e: TouchEvent) => {
+    e.preventDefault()
+    if (e.touches.length > 0) {
+      const touch = e.touches[0]
+      handlePointerMove(touch.clientX, touch.clientY)
+      handlePointerClick(touch.clientX, touch.clientY)
+    }
+  }, [handlePointerMove, handlePointerClick])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -127,13 +163,21 @@ export default function WorldCanvas({ onNavigate }: { onNavigate?: (route: strin
       canvas!.style.width = window.innerWidth + 'px'
       canvas!.style.height = window.innerHeight + 'px'
 
-      worldRef.current = createWorld(canvas!.width, canvas!.height)
+      if (!worldRef.current) {
+        // First creation only
+        worldRef.current = createWorld(canvas!.width, canvas!.height)
+      } else {
+        // On resize, just update scale — don't recreate world
+        worldRef.current.scale = canvas!.height / 800
+      }
     }
 
     resize()
     window.addEventListener('resize', resize)
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('click', handleClick)
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false })
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: false })
 
     let lastTime = 0
 
@@ -179,18 +223,20 @@ export default function WorldCanvas({ onNavigate }: { onNavigate?: (route: strin
       window.removeEventListener('resize', resize)
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('click', handleClick)
+      canvas.removeEventListener('touchmove', handleTouchMove)
+      canvas.removeEventListener('touchstart', handleTouchStart)
       if (audioRef.current) {
         audioRef.current.dispose()
         audioRef.current = null
       }
     }
-  }, [handleMouseMove, handleClick])
+  }, [handleMouseMove, handleClick, handleTouchMove, handleTouchStart])
 
   return (
     <canvas
       ref={canvasRef}
       className="fixed inset-0 w-full h-full"
-      style={{ cursor: 'none' }}
+      style={{ cursor: 'none', touchAction: 'none' }}
     />
   )
 }
@@ -209,6 +255,7 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   drawParticlesForLayer(ctx, world, 2)
   drawNavNodes(ctx, world)
   drawRipples(ctx, world, world.scale)
+  drawFlashes(ctx, world, world.scale)
 
   if (isDead) {
     // Desaturation overlay when dead
@@ -355,7 +402,7 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, h: number) 
       ctx.moveTo(blade.x, baseY)
       ctx.quadraticCurveTo(cpX, cpY, tipX, tipY)
       const heightFrac = blade.baseHeight / (320 * s)
-      const lit = baseLit * (0.35 + heightFrac * 0.65)
+      const lit = baseLit * (0.5 + heightFrac * 0.5)
       const sat = baseSat * (0.5 + heightFrac * 0.5)
       ctx.strokeStyle = `hsl(${baseHue + heightFrac * 15}, ${sat}%, ${lit}%)`
     }
@@ -393,6 +440,32 @@ function drawRipples(ctx: CanvasRenderingContext2D, world: WorldState, scale: nu
       ctx.fillStyle = `hsla(${hue}, 55%, 50%, ${r.alpha * 0.07})`
       ctx.fill()
     }
+  }
+}
+
+function drawFlashes(ctx: CanvasRenderingContext2D, world: WorldState, scale: number) {
+  for (let i = 0; i < world.flashes.length; i++) {
+    const f = world.flashes[i]
+    if (f.alpha < 0.03) continue
+
+    // Outer glow
+    ctx.beginPath()
+    ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2)
+    ctx.fillStyle = `rgba(${f.r}, ${f.g}, ${f.b}, ${f.alpha * 0.15})`
+    ctx.fill()
+
+    // Bright ring
+    ctx.beginPath()
+    ctx.arc(f.x, f.y, f.radius * 0.6, 0, Math.PI * 2)
+    ctx.strokeStyle = `rgba(${f.r}, ${f.g}, ${f.b}, ${f.alpha * 0.6})`
+    ctx.lineWidth = 2.5 * scale
+    ctx.stroke()
+
+    // Core burst
+    ctx.beginPath()
+    ctx.arc(f.x, f.y, f.radius * 0.2, 0, Math.PI * 2)
+    ctx.fillStyle = `rgba(${Math.min(255, f.r + 50)}, ${Math.min(255, f.g + 50)}, ${Math.min(255, f.b + 50)}, ${f.alpha * 0.8})`
+    ctx.fill()
   }
 }
 
@@ -732,24 +805,26 @@ function drawEmber(ctx: CanvasRenderingContext2D, world: WorldState) {
 function drawKarmaOverlay(ctx: CanvasRenderingContext2D, w: number, h: number, world: WorldState) {
   const { karma } = world
 
-  // High corruption: sickly green-gray vignette
+  // High corruption: sickly green-gray edge tint (simple rects for vignette)
   if (karma.corruption > 0.3) {
-    const intensity = (karma.corruption - 0.3) * 0.15
-    const grad = ctx.createRadialGradient(w / 2, h / 2, w * 0.2, w / 2, h / 2, w * 0.7)
-    grad.addColorStop(0, 'transparent')
-    grad.addColorStop(1, `rgba(40, 50, 35, ${intensity})`)
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, w, h)
+    const intensity = (karma.corruption - 0.3) * 0.12
+    ctx.fillStyle = `rgba(40, 50, 35, ${intensity})`
+    const edge = w * 0.12
+    ctx.fillRect(0, 0, edge, h)
+    ctx.fillRect(w - edge, 0, edge, h)
+    ctx.fillRect(0, 0, w, edge)
+    ctx.fillRect(0, h - edge, w, edge)
   }
 
-  // High hostility: cold edge tint
+  // High hostility: cold edge tint (simple rects for vignette)
   if (karma.hostility > 0.4) {
-    const intensity = (karma.hostility - 0.4) * 0.1
-    const grad = ctx.createRadialGradient(w / 2, h / 2, w * 0.3, w / 2, h / 2, w * 0.65)
-    grad.addColorStop(0, 'transparent')
-    grad.addColorStop(1, `rgba(30, 35, 60, ${intensity})`)
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, w, h)
+    const intensity = (karma.hostility - 0.4) * 0.08
+    ctx.fillStyle = `rgba(30, 35, 60, ${intensity})`
+    const edge = w * 0.1
+    ctx.fillRect(0, 0, edge, h)
+    ctx.fillRect(w - edge, 0, edge, h)
+    ctx.fillRect(0, 0, w, edge)
+    ctx.fillRect(0, h - edge, w, edge)
   }
 }
 

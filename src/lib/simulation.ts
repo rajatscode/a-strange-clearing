@@ -70,6 +70,17 @@ export type Ripple = {
   alpha: number
 }
 
+export type Flash = {
+  x: number
+  y: number
+  r: number
+  g: number
+  b: number
+  radius: number
+  maxRadius: number
+  alpha: number
+}
+
 export type NavNodeKind = 'note' | 'artifact' | 'bio'
 
 export type NavNode = {
@@ -89,6 +100,7 @@ export type WorldState = {
   particles: Particle[]
   grass: GrassBlade[]
   ripples: Ripple[]
+  flashes: Flash[]
   navNodes: NavNode[]
   mood: CosmicMood
   karma: KarmaState
@@ -191,8 +203,10 @@ export function createWorld(width: number, height: number): WorldState {
 
   const area = width * height
   const densityScale = Math.min(1, area / (1920 * 1080 * 4))
-  const grassCount = Math.floor((180 + mood.grassDensity * 70) * densityScale)
-  const particleCount = Math.floor((35 + mood.driftSpeed * 15) * densityScale)
+  const isMobile = 'ontouchstart' in window || window.innerWidth < 768
+  const mobileScale = isMobile ? 0.6 : 1
+  const grassCount = Math.floor((180 + mood.grassDensity * 70) * densityScale * mobileScale)
+  const particleCount = Math.floor((35 + mood.driftSpeed * 15) * densityScale * mobileScale)
 
   const grass: GrassBlade[] = []
   for (let i = 0; i < grassCount; i++) {
@@ -252,6 +266,7 @@ export function createWorld(width: number, height: number): WorldState {
     particles,
     grass,
     ripples: [],
+    flashes: [],
     navNodes,
     mood,
     karma,
@@ -429,12 +444,13 @@ export function updateWorld(state: WorldState, dt: number, width: number, height
     updateGrass(state, dt, height)
     updateParticles(state, dt, width, height)
     updateRipples(state, dt)
+    updateFlashes(state, dt)
     periodicSave(state, dt)
     return
   }
 
   // Player follows mouse with lerp
-  const lerpFactor = 0.08
+  const lerpFactor = 0.12
   player.x += (player.targetX - player.x) * lerpFactor
   player.y += (player.targetY - player.y) * lerpFactor
 
@@ -516,6 +532,7 @@ export function updateWorld(state: WorldState, dt: number, width: number, height
   updateGrass(state, dt, height)
   updateParticles(state, dt, width, height)
   updateRipples(state, dt)
+  updateFlashes(state, dt)
   periodicSave(state, dt)
 }
 
@@ -805,9 +822,20 @@ function updateRipples(state: WorldState, dt: number): void {
   for (let i = state.ripples.length - 1; i >= 0; i--) {
     const r = state.ripples[i]
     r.radius += dt * 120 * state.scale
-    r.alpha *= 0.96
+    r.alpha *= 0.97
     if (r.alpha < 0.01 || r.radius > r.maxRadius) {
       state.ripples.splice(i, 1)
+    }
+  }
+}
+
+function updateFlashes(state: WorldState, _dt: number): void {
+  for (let i = state.flashes.length - 1; i >= 0; i--) {
+    const f = state.flashes[i]
+    f.radius += (f.maxRadius - f.radius) * 0.15
+    f.alpha *= 0.88
+    if (f.alpha < 0.02) {
+      state.flashes.splice(i, 1)
     }
   }
 }
@@ -826,5 +854,19 @@ export function addRipple(state: WorldState, x: number, y: number): void {
     radius: 5 * state.scale,
     maxRadius: (150 + state.karma.beauty * 100) * state.scale,
     alpha: 0.5 + state.karma.beauty * 0.3,
+  })
+}
+
+export function addFlash(state: WorldState, x: number, y: number, r: number, g: number, b: number, size?: number): void {
+  const s = state.scale
+  state.flashes.push({
+    x,
+    y,
+    r,
+    g,
+    b,
+    radius: 5 * s,
+    maxRadius: (size ?? 60) * s,
+    alpha: 0.8,
   })
 }
