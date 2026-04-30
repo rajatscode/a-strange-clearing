@@ -21,6 +21,7 @@ export default function App() {
   const [phase, setPhase] = useState<TransitionPhase>('idle')
   const [showFallbackLinks, setShowFallbackLinks] = useState(false)
   const fallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingRoute = useRef<Route | null>(null)
 
   useEffect(() => {
     fallbackTimer.current = setTimeout(() => setShowFallbackLinks(true), 60000)
@@ -45,12 +46,9 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [route])
 
-  const navigateTo = useCallback((next: Route) => {
-    if (phase !== 'idle') return
+  const startTransition = useCallback((next: Route) => {
     setRoute(next)
-
     if (next !== 'clearing') {
-      // Leaving clearing: bloom → fade-out → blackout → swap → fade-in
       setPhase('bloom')
       setTimeout(() => {
         setPhase('fade-out')
@@ -64,7 +62,6 @@ export default function App() {
         }, 400)
       }, 200)
     } else {
-      // Returning to clearing: fade-out → blackout → swap → fade-in
       setPhase('fade-out')
       setTimeout(() => {
         setPhase('blackout')
@@ -75,7 +72,24 @@ export default function App() {
         }, 300)
       }, 400)
     }
-  }, [phase])
+  }, [])
+
+  // Process queued navigation when transition finishes
+  useEffect(() => {
+    if (phase === 'idle' && pendingRoute.current !== null) {
+      const queued = pendingRoute.current
+      pendingRoute.current = null
+      startTransition(queued)
+    }
+  }, [phase, startTransition])
+
+  const navigateTo = useCallback((next: Route) => {
+    if (phase !== 'idle') {
+      pendingRoute.current = next
+      return
+    }
+    startTransition(next)
+  }, [phase, startTransition])
 
   const handleNavigate = useCallback((hashRoute: string) => {
     window.location.hash = hashRoute
