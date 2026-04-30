@@ -88,6 +88,8 @@ export function createWorld(width: number, height: number): WorldState {
       hue: Math.random() < 0.4 ? 165 + Math.random() * 35 : 95 + Math.random() * 35, // cyan or acid green
     })
   }
+  // Sort once at creation — shorter blades first for proper layering
+  grass.sort((a, b) => a.baseHeight - b.baseHeight)
 
   const particles: Particle[] = []
   for (let i = 0; i < particleCount; i++) {
