@@ -72,10 +72,10 @@ export class AudioEngine {
     this.started = true
     const ctx = this.ctx
 
-    // Master gain — crossfade in on start to avoid noise gaps
+    // Master gain — smooth fade-in on start to avoid noise gaps
     this.master = ctx.createGain()
     this.master.gain.setValueAtTime(0, ctx.currentTime)
-    this.master.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.5)
+    this.master.gain.setTargetAtTime(0.2, ctx.currentTime, 0.15)
 
     // Death filter (always in chain, starts open)
     this.deathFilter = ctx.createBiquadFilter()
@@ -497,13 +497,14 @@ export class AudioEngine {
   update(params: AudioParams): void {
     if (!this.started || !this.ctx || this.disposed) return
 
-    // Resume if suspended (autoplay policy) — crossfade back in
+    // Resume if suspended (autoplay policy) — smooth fade-in to avoid gap
     if (this.ctx.state === 'suspended') {
       this.ctx.resume().then(() => {
-        if (this.master && !this.muted) {
-          const now = this.ctx!.currentTime
+        if (this.master && !this.muted && this.ctx) {
+          const now = this.ctx.currentTime
+          this.master.gain.cancelScheduledValues(now)
           this.master.gain.setValueAtTime(0, now)
-          this.master.gain.linearRampToValueAtTime(0.2, now + 0.5)
+          this.master.gain.setTargetAtTime(0.2, now, 0.15)
         }
       })
     }
