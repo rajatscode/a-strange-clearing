@@ -203,7 +203,6 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     canvas.addEventListener('touchstart', handleTouchStart, { passive: false })
 
     let lastTime = 0
-
     function render(timestamp: number) {
       if (!alive) return
 
@@ -557,6 +556,13 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
 
   ctx.lineCap = 'round'
 
+  // Cache corruptors for dead zone checks (avoid filtering inside grass loop)
+  const corruptorCache: Array<{x: number, y: number, corruption: number}> = []
+  for (let ci = 0; ci < world.entities.length; ci++) {
+    const ce = world.entities[ci]
+    if (ce.kind === 'corruptor' && ce.alive) corruptorCache.push(ce)
+  }
+
   const h = world.worldHeight
   for (let i = 0; i < world.grass.length; i++) {
     const blade = world.grass[i]
@@ -571,28 +577,35 @@ function drawGrass(ctx: CanvasRenderingContext2D, world: WorldState, _h: number,
 
     const strokeW = 1.5 * s + effectiveHeight * 0.008
 
-    // Dead zone: grass near corruptors turns gray/brown
+    // Dead zone: grass near corruptors turns gray/brown (use squared distance, AABB early-out)
     let deadZone = 0
-    for (let ci = 0; ci < world.entities.length; ci++) {
-      const ce = world.entities[ci]
-      if (ce.kind !== 'corruptor' || !ce.alive) continue
+    const dzRange = 120 * s
+    const dzRangeSq = dzRange * dzRange
+    for (let ci = 0; ci < corruptorCache.length; ci++) {
+      const ce = corruptorCache[ci]
       const cdx = blade.x - ce.x
+      if (Math.abs(cdx) > dzRange) continue
       const cdy = tipY - ce.y
-      const cdist = Math.sqrt(cdx * cdx + cdy * cdy)
-      if (cdist < 120 * s) {
-        deadZone = Math.max(deadZone, (1 - cdist / (120 * s)) * ce.corruption)
+      if (Math.abs(cdy) > dzRange) continue
+      const cdistSq = cdx * cdx + cdy * cdy
+      if (cdistSq < dzRangeSq) {
+        deadZone = Math.max(deadZone, (1 - Math.sqrt(cdistSq) / dzRange) * ce.corruption)
       }
     }
 
-    // Gravitational shimmer: grass near hidden nav nodes glows warmer
+    // Gravitational shimmer: grass near hidden nav nodes glows warmer (use squared distance)
     let navGlow = 0
+    const navRange = 100 * s
+    const navRangeSq = navRange * navRange
     for (let n = 0; n < world.navNodes.length; n++) {
       const node = world.navNodes[n]
       const ndx = blade.x - node.x
+      if (Math.abs(ndx) > navRange) continue
       const ndy = tipY - node.y
-      const ndist = Math.sqrt(ndx * ndx + ndy * ndy)
-      if (ndist < 100 * s) {
-        navGlow = Math.max(navGlow, (1 - ndist / (100 * s)) * 0.3)
+      if (Math.abs(ndy) > navRange) continue
+      const ndistSq = ndx * ndx + ndy * ndy
+      if (ndistSq < navRangeSq) {
+        navGlow = Math.max(navGlow, (1 - Math.sqrt(ndistSq) / navRange) * 0.3)
       }
     }
 
@@ -1195,9 +1208,10 @@ function drawConnectionLines(ctx: CanvasRenderingContext2D, world: WorldState, w
     nourish: '180, 65%, 65%',
   }
 
-  for (let i = 0; i < world.connectionLines.length; i++) {
+  const maxLines = Math.min(world.connectionLines.length, 15)
+  for (let i = 0; i < maxLines; i++) {
     const line = world.connectionLines[i]
-    if (line.alpha < 0.02) continue
+    if (line.alpha < 0.05) continue
     // Only draw if both endpoints are on screen
     if (!onScreen(line.x1, line.y1, cam, w, h) || !onScreen(line.x2, line.y2, cam, w, h)) continue
 

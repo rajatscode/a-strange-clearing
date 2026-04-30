@@ -215,7 +215,7 @@ export const ENTITY_COLORS: Record<EntityKind, { r: number; g: number; b: number
 
 function spawnEntities(width: number, height: number, scale: number, totalVisits: number = 0): Entity[] {
   const area = width * height
-  const baseCount = 40
+  const baseCount = 25
   const isSmallViewport = typeof window !== 'undefined' && window.innerWidth < 400
   const areaScale = Math.max(0.6, Math.min(2.0, area / (1920 * 1080 * 6)))
   const total = Math.floor(baseCount * areaScale * (isSmallViewport ? 0.5 : 1))
@@ -975,14 +975,16 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
           seekX += nx * attraction
           seekY += ny * attraction
         }
+        const coopRange = 200 * s
         for (let j = 0; j < state.entities.length; j++) {
           if (j === i) continue
           const other = state.entities[j]
           if (!other.alive || other.kind !== 'cooperator') continue
           const odx = other.x - e.x
           const ody = other.y - e.y
+          if (Math.abs(odx) > coopRange || Math.abs(ody) > coopRange) continue
           const odist = Math.sqrt(odx * odx + ody * ody)
-          if (odist < 200 * s && odist > 20 * s) {
+          if (odist < coopRange && odist > 20 * s) {
             seekX += (odx / odist) * 0.10
             seekY += (ody / odist) * 0.10
           }
@@ -992,14 +994,16 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
           seekX -= nx * 0.25
           seekY -= ny * 0.25
         }
+        const huntRange = 250 * s
         for (let j = 0; j < state.entities.length; j++) {
           if (j === i) continue
           const other = state.entities[j]
           if (!other.alive || other.kind !== 'fragile') continue
           const odx = other.x - e.x
           const ody = other.y - e.y
+          if (Math.abs(odx) > huntRange || Math.abs(ody) > huntRange) continue
           const odist = Math.sqrt(odx * odx + ody * ody)
-          if (odist < 250 * s && odist > 15 * s) {
+          if (odist < huntRange && odist > 15 * s) {
             seekX += (odx / odist) * 0.20
             seekY += (ody / odist) * 0.20
           }
@@ -1017,14 +1021,16 @@ function updateEntities(state: WorldState, dt: number, _viewportWidth: number, _
       } else if (e.kind === 'corruptor') {
         seekX += Math.sin(time * 0.15 + e.phase) * 0.1
         seekY += Math.cos(time * 0.12 + e.phase * 1.5) * 0.08
+        const corruptRange = 120 * s
         for (let j = 0; j < state.entities.length; j++) {
           if (j === i) continue
           const other = state.entities[j]
           if (!other.alive || other.kind === 'corruptor') continue
           const odx = other.x - e.x
           const ody = other.y - e.y
+          if (Math.abs(odx) > corruptRange || Math.abs(ody) > corruptRange) continue
           const odist = Math.sqrt(odx * odx + ody * ody)
-          if (odist < 120 * s) {
+          if (odist < corruptRange) {
             const prevCorruption = other.corruption
             other.corruption = Math.min(1, other.corruption + dt * 0.018 * e.corruption)
             other.beauty = Math.max(0, other.beauty - dt * 0.008)
@@ -1079,13 +1085,15 @@ function rebuildConnectionLines(state: WorldState): void {
     if (!e.alive) continue
 
     if (e.kind === 'cooperator') {
+      const coopLineDist = 140 * s
       for (let j = i + 1; j < entities.length; j++) {
         const other = entities[j]
         if (!other.alive || other.kind !== 'cooperator') continue
         const dx = other.x - e.x
         const dy = other.y - e.y
+        if (Math.abs(dx) > coopLineDist || Math.abs(dy) > coopLineDist) continue
         const dist = Math.sqrt(dx * dx + dy * dy)
-        if (dist < 140 * s) {
+        if (dist < coopLineDist) {
           const alpha = (1 - dist / (140 * s)) * 0.3 * Math.min(e.energy, other.energy)
           state.connectionLines.push({
             x1: e.x, y1: e.y, x2: other.x, y2: other.y,
@@ -1096,13 +1104,15 @@ function rebuildConnectionLines(state: WorldState): void {
     }
 
     if (e.kind === 'defector') {
+      const huntLineDist = 120 * s
       for (let j = 0; j < entities.length; j++) {
         const other = entities[j]
         if (!other.alive || other.kind !== 'fragile') continue
         const dx = other.x - e.x
         const dy = other.y - e.y
+        if (Math.abs(dx) > huntLineDist || Math.abs(dy) > huntLineDist) continue
         const dist = Math.sqrt(dx * dx + dy * dy)
-        if (dist < 120 * s) {
+        if (dist < huntLineDist) {
           const alpha = Math.max(0.3, (1 - dist / (120 * s)) * 0.5 * e.hostility)
           state.connectionLines.push({
             x1: e.x, y1: e.y, x2: other.x, y2: other.y,
@@ -1113,14 +1123,16 @@ function rebuildConnectionLines(state: WorldState): void {
     }
 
     if (e.kind === 'corruptor') {
+      const corruptLineDist = 100 * s
       for (let j = 0; j < entities.length; j++) {
         if (j === i) continue
         const other = entities[j]
         if (!other.alive || other.kind === 'corruptor') continue
         const dx = other.x - e.x
         const dy = other.y - e.y
+        if (Math.abs(dx) > corruptLineDist || Math.abs(dy) > corruptLineDist) continue
         const dist = Math.sqrt(dx * dx + dy * dy)
-        if (dist < 100 * s) {
+        if (dist < corruptLineDist) {
           const alpha = Math.max(0.2, (1 - dist / (100 * s)) * 0.3 * e.corruption)
           state.connectionLines.push({
             x1: e.x, y1: e.y, x2: other.x, y2: other.y,
