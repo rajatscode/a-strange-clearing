@@ -35,7 +35,7 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     lastMouseRef.current.y = clientY
     lastMouseRef.current.time = now
 
-    const dpr = window.devicePixelRatio || 1
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
     // Convert screen coordinates to world space
     world.player.targetX = clientX * dpr + world.camera.x
     world.player.targetY = clientY * dpr + world.camera.y
@@ -79,7 +79,7 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
       audioRef.current.start()
     }
 
-    const dpr = window.devicePixelRatio || 1
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
 
     // Check mute button click
     const canvas = canvasRef.current
@@ -180,7 +180,7 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     }
 
     function resize() {
-      const dpr = window.devicePixelRatio || 1
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
       canvas!.width = window.innerWidth * dpr
       canvas!.height = window.innerHeight * dpr
       canvas!.style.width = window.innerWidth + 'px'
@@ -1241,7 +1241,7 @@ function drawFragments(ctx: CanvasRenderingContext2D, world: WorldState, cam: Ca
 
 
 function drawMuteGlyph(ctx: CanvasRenderingContext2D, w: number, h: number, muted: boolean, hovering: boolean) {
-  const dpr = window.devicePixelRatio || 1
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
   const cx = w - 36 * dpr
   const cy = h - 36 * dpr
   const r = 10 * dpr
