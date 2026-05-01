@@ -1,5 +1,4 @@
-// Agent rendering — reuses drawCentipede for each NPC agent
-// All agents look visually similar (identity revealed through behavior, not appearance)
+// Agent rendering — each agent has unique color variation (seeded, NOT tied to personality)
 
 import type { AgentSystem } from './agents'
 import { drawCentipede } from './render-centipede'
@@ -15,7 +14,10 @@ export function drawAgents(
   vpW: number,
   vpH: number,
 ): void {
-  for (const agent of system.agents) {
-    drawCentipede(ctx, agent.centipede, time, scale, cam, vpW, vpH)
+  for (let i = 0; i < system.agents.length; i++) {
+    const agent = system.agents[i]
+    // Seed from phase (set at creation, unique per agent) — NOT personality
+    const seed = Math.floor(agent.phase * 1000)
+    drawCentipede(ctx, agent.centipede, time, scale, cam, vpW, vpH, false, seed)
   }
 }

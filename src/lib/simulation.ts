@@ -3,7 +3,7 @@ import { getCosmicMood } from './mood'
 import type { KarmaState } from './persistence'
 import { loadKarma, saveKarma } from './persistence'
 import type { Centipede } from './centipede'
-import { createCentipede, updateCentipede, getHeadPosition, addSegment } from './centipede'
+import { createCentipede, updateCentipede, getHeadPosition, addMiddleSegment, removeMiddleSegment } from './centipede'
 import type { Tree } from './tree'
 import { generateTree, updateLeafHealth, updateLeaves } from './tree'
 import type { StarField } from './stars'
@@ -217,6 +217,7 @@ export type WorldState = {
   firstInteraction: boolean
   reducedMotion: boolean
   nearNavNodeMissed: boolean
+  godMode: boolean
 }
 
 export const ENTITY_COLORS: Record<EntityKind, { r: number; g: number; b: number; hue: number }> = {
@@ -441,6 +442,7 @@ export function createWorld(viewportWidth: number, viewportHeight: number): Worl
     firstInteraction: false,
     reducedMotion: typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
     nearNavNodeMissed: false,
+    godMode: false,
   }
 }
 
@@ -813,7 +815,7 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   }
 
   // Centipede hops between leaves based on mouse proximity to reachable leaves
-  updateCentipede(state.centipede, state.mouseScreenX, state.mouseScreenY, viewportWidth, viewportHeight, camera.x, camera.y, dt, state.tree)
+  updateCentipede(state.centipede, state.mouseScreenX, state.mouseScreenY, viewportWidth, viewportHeight, camera.x, camera.y, dt, state.tree, state.godMode)
 
   // Sync player position with centipede head for backwards compat with other systems
   const centipedeHead = getHeadPosition(state.centipede)
@@ -930,38 +932,221 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   updateLeaves(state.tree, dt, state.time)
   updateStarField(state.starField, state.tree, state.karma, dt, state.time)
 
-  // Pot mechanic — cooperation/defection
-  const potResult = updatePot(state.pot, state.agents, state.centipede, state.tree, state.karma, dt)
-  if (potResult.type === 'both_cooperate') {
-    // Positive-sum: each gets potSize * 0.75, player gains segment, golden dust
-    player.energy = Math.min(3.0, player.energy + potResult.potSize * 0.75 * 0.05)
-    addDust(state.starField, potResult.x, potResult.y, true, potResult.potSize * 0.5)
-    addSegment(state.centipede)
-    karma.beauty = Math.min(1, karma.beauty + 0.04)
-    karma.trust = Math.min(1, karma.trust + 0.03)
-    addFlash(state, potResult.x, potResult.y, 255, 220, 120, 100 * state.scale)
-    addBeautyBloom(state, potResult.x, potResult.y, 200)
-  } else if (potResult.type === 'player_defects') {
-    // Player defects, agent cooperates: player takes full pot
-    player.energy = Math.min(3.0, player.energy + potResult.potSize * 0.1)
-    addDust(state.starField, potResult.x, potResult.y, false, potResult.potSize * 0.3)
-    karma.beauty = Math.max(0, karma.beauty - 0.06)
-    karma.hostility = Math.min(1, karma.hostility + 0.04)
-    karma.corruption = Math.min(1, karma.corruption + 0.03)
-    addFlash(state, potResult.x, potResult.y, 60, 30, 80, 80 * state.scale)
-  } else if (potResult.type === 'agent_defects') {
-    // Agent defects, player cooperates: player loses energy
-    player.energy = Math.max(0, player.energy - potResult.potSize * 0.03)
-    addDust(state.starField, potResult.x, potResult.y, false, potResult.potSize * 0.3)
-    karma.trust = Math.max(0, karma.trust - 0.02)
-    addFlash(state, potResult.x, potResult.y, 80, 40, 100, 80 * state.scale)
-  } else if (potResult.type === 'both_defect') {
-    // Both defect: pot destroyed, both lose a bit
-    player.energy = Math.max(0, player.energy - potResult.potSize * 0.01)
-    addDust(state.starField, potResult.x, potResult.y, false, potResult.potSize * 0.3)
-    karma.hostility = Math.min(1, karma.hostility + 0.02)
-    karma.corruption = Math.min(1, karma.corruption + 0.02)
-    addFlash(state, potResult.x, potResult.y, 50, 30, 60, 70 * state.scale)
+  // Bond mechanic — cooperation/defection
+  const bondResults = updatePot(state.pot, state.agents, state.centipede, state.tree, state.karma, dt)
+  for (const result of bondResults) {
+    if (result.type === 'cooperate') {
+      // POSITIVE SUM: return stakes + bonus. Segments were already removed at bond start.
+      // Party 1 gets back: stake1 + 50% of stake2 (bonus from the other's investment)
+      // Party 2 gets back: stake2 + 50% of stake1
+      // The surplus that exceeds inputs becomes gold dust → stars
+      const return1 = result.stake1 + Math.max(1, Math.floor(result.stake2 * 0.5))
+      const return2 = result.stake2 + Math.max(1, Math.floor(result.stake1 * 0.5))
+      const surplusDust = result.potSize * 1.5
+      addDust(state.starField, result.playerX, result.playerY, true, surplusDust * 0.5)
+      addDust(state.starField, result.agentX, result.agentY, true, surplusDust * 0.5)
+
+      if (result.isPlayerBond) {
+        player.energy = Math.min(3.0, player.energy + result.potSize * 0.08)
+        for (let g = 0; g < return1; g++) addMiddleSegment(state.centipede)
+        const coopAgent = state.agents.agents[result.agentIdx]
+        if (coopAgent) for (let g = 0; g < return2; g++) addMiddleSegment(coopAgent.centipede)
+        karma.beauty = Math.min(1, karma.beauty + 0.06 * result.spectrumValue)
+        karma.trust = Math.min(1, karma.trust + 0.05 * result.spectrumValue)
+      } else {
+        const a1 = state.agents.agents[result.agentIdx]
+        const a2 = state.agents.agents[result.agent2Idx]
+        if (a1) for (let g = 0; g < return1; g++) addMiddleSegment(a1.centipede)
+        if (a2) for (let g = 0; g < return2; g++) addMiddleSegment(a2.centipede)
+      }
+
+      // Immediate local bloom — nearby leaves pulse with health
+      for (const leaf of state.tree.leaves) {
+        const dx = leaf.x - (result.playerX + result.agentX) / 2
+        const dy = leaf.y - (result.playerY + result.agentY) / 2
+        if (dx * dx + dy * dy < 200 * 200) {
+          leaf.health = Math.min(1, leaf.health + 0.08 * result.spectrumValue)
+          leaf.glowIntensity = Math.min(1, leaf.glowIntensity + 0.1)
+        }
+      }
+
+      addFlash(state, (result.playerX + result.agentX) / 2, (result.playerY + result.agentY) / 2, 255, 220, 120, 120 * state.scale)
+      addBeautyBloom(state, (result.playerX + result.agentX) / 2, (result.playerY + result.agentY) / 2, 250)
+
+    } else if (result.type === 'defect') {
+      // NEGATIVE SUM: segments were already removed at bond start.
+      // Defector gets back: their own stake + 70% of victim's stake
+      // Victim gets back: NOTHING (their segments are gone)
+      // 30% of victim's stake becomes black dust (the negative sum)
+      const playerDefected = result.spectrumValue <= 0.5
+      const defectorStake = playerDefected ? result.stake1 : result.stake2
+      const victimStake = playerDefected ? result.stake2 : result.stake1
+      const defectorReturn = defectorStake + Math.max(1, Math.floor(victimStake * 0.7))
+      const defectorX = playerDefected ? result.playerX : result.agentX
+      const defectorY = playerDefected ? result.playerY : result.agentY
+      const victimX = playerDefected ? result.agentX : result.playerX
+      const victimY = playerDefected ? result.agentY : result.playerY
+
+      // The 30% lost goes to black dust
+      addDust(state.starField, defectorX, defectorY, false, Math.ceil(victimStake * 0.3) * 3)
+
+      if (result.isPlayerBond) {
+        if (playerDefected) {
+          // Player defected — gets their stake back + stolen segments
+          for (let g = 0; g < defectorReturn; g++) addMiddleSegment(state.centipede)
+          // Victim already lost their stake at bond start — nothing returned
+          karma.beauty = Math.max(0, karma.beauty - 0.08)
+          karma.hostility = Math.min(1, karma.hostility + 0.06)
+          karma.corruption = Math.min(1, karma.corruption + 0.05)
+        } else {
+          // Agent defected — agent gets their stake back + stolen
+          const defector = state.agents.agents[result.agentIdx]
+          if (defector) for (let g = 0; g < defectorReturn; g++) addMiddleSegment(defector.centipede)
+          // Player already lost their stake — nothing returned
+          karma.trust = Math.max(0, karma.trust - 0.04)
+        }
+      } else {
+        const a1 = state.agents.agents[result.agentIdx]
+        const a2 = state.agents.agents[result.agent2Idx]
+        if (playerDefected) {
+          if (a1) for (let g = 0; g < defectorReturn; g++) addMiddleSegment(a1.centipede)
+        } else {
+          if (a2) for (let g = 0; g < defectorReturn; g++) addMiddleSegment(a2.centipede)
+        }
+      }
+
+      for (const leaf of state.tree.leaves) {
+        const dx = leaf.x - victimX, dy = leaf.y - victimY
+        if (dx * dx + dy * dy < 200 * 200) {
+          leaf.health = Math.max(0, leaf.health - 0.08)
+          leaf.glowIntensity = Math.max(0, leaf.glowIntensity - 0.12)
+        }
+      }
+      addFlash(state, defectorX, defectorY, 60, 20, 80, 100 * state.scale)
+
+    } else if (result.type === 'mutual_defect') {
+      // MUTUAL DEFECT: segments already removed at bond start.
+      // Both get back 70% of their own stake. 30% lost as black dust.
+      const return1 = Math.floor(result.stake1 * 0.7)
+      const return2 = Math.floor(result.stake2 * 0.7)
+      const dust1 = Math.ceil(result.stake1 * 0.3)
+      const dust2 = Math.ceil(result.stake2 * 0.3)
+      addDust(state.starField, result.playerX, result.playerY, false, dust1 * 2)
+      addDust(state.starField, result.agentX, result.agentY, false, dust2 * 2)
+
+      if (result.isPlayerBond) {
+        for (let g = 0; g < return1; g++) addMiddleSegment(state.centipede)
+        const a = state.agents.agents[result.agentIdx]
+        if (a) for (let g = 0; g < return2; g++) addMiddleSegment(a.centipede)
+        karma.hostility = Math.min(1, karma.hostility + 0.02)
+        karma.corruption = Math.min(1, karma.corruption + 0.02)
+      } else {
+        const a1 = state.agents.agents[result.agentIdx]
+        const a2 = state.agents.agents[result.agent2Idx]
+        if (a1) for (let g = 0; g < return1; g++) addMiddleSegment(a1.centipede)
+        if (a2) for (let g = 0; g < return2; g++) addMiddleSegment(a2.centipede)
+      }
+
+      const midX = (result.playerX + result.agentX) / 2
+      const midY = (result.playerY + result.agentY) / 2
+      for (const leaf of state.tree.leaves) {
+        const dx = leaf.x - midX, dy = leaf.y - midY
+        if (dx * dx + dy * dy < 150 * 150) {
+          leaf.health = Math.max(0, leaf.health - 0.04)
+          leaf.glowIntensity = Math.max(0, leaf.glowIntensity - 0.06)
+        }
+      }
+      addFlash(state, midX, midY, 40, 20, 50, 80 * state.scale)
+    }
+
+    // --- Update agent strategy memory ---
+    const updateAgentMemory = (agentIdx: number, outcome: 'cooperated' | 'was_defected' | 'defected' | 'mutual_defect', ownMove: number) => {
+      const a = state.agents.agents[agentIdx]
+      if (!a) return
+      a.prevBondResult = a.lastBondResult
+      a.lastBondResult = outcome
+      a.lastOwnMove = ownMove
+      a.bondCount++
+      if (outcome === 'was_defected') a.everBetrayed = true
+    }
+
+    if (result.type === 'cooperate') {
+      if (result.isPlayerBond) {
+        updateAgentMemory(result.agentIdx, 'cooperated', result.spectrumValue > 0.5 ? 1 : 0)
+      } else {
+        updateAgentMemory(result.agentIdx, 'cooperated', 1)
+        updateAgentMemory(result.agent2Idx, 'cooperated', 1)
+      }
+    } else if (result.type === 'defect') {
+      if (result.isPlayerBond) {
+        updateAgentMemory(result.agentIdx,
+          result.spectrumValue <= 0.5 ? 'was_defected' : 'defected',
+          result.spectrumValue <= 0.5 ? 1 : 0)
+      } else {
+        if (result.spectrumValue <= 0.5) {
+          updateAgentMemory(result.agentIdx, 'defected', 0)
+          updateAgentMemory(result.agent2Idx, 'was_defected', 1)
+        } else {
+          updateAgentMemory(result.agentIdx, 'was_defected', 1)
+          updateAgentMemory(result.agent2Idx, 'defected', 0)
+        }
+      }
+    } else if (result.type === 'mutual_defect') {
+      if (result.isPlayerBond) {
+        updateAgentMemory(result.agentIdx, 'mutual_defect', 0)
+      } else {
+        updateAgentMemory(result.agentIdx, 'mutual_defect', 0)
+        updateAgentMemory(result.agent2Idx, 'mutual_defect', 0)
+      }
+    }
+
+    // --- Agent death check: if any agent was a defection victim, check if they should die ---
+    if (result.type === 'defect' || result.type === 'mutual_defect') {
+      const checkAgentDeath = (agentIdx: number) => {
+        const agent = state.agents.agents[agentIdx]
+        if (!agent) return
+        if (agent.centipede.segments.length <= 2) {
+          // Agent dies — their life energy returns to the world as golden dust
+          const head = agent.centipede.segments[0]
+          if (head) {
+            addDust(state.starField, head.x, head.y, true, 8) // golden burst
+            // Scatter remaining segments as small dust particles
+            for (const seg of agent.centipede.segments) {
+              addDust(state.starField, seg.x, seg.y, true, 1)
+            }
+          }
+          // Remove agent from system
+          state.agents.agents.splice(agentIdx, 1)
+        }
+      }
+
+      if (result.type === 'defect') {
+        // The victim is the one who got defected ON
+        if (result.isPlayerBond) {
+          if (result.spectrumValue <= 0.5) {
+            // Player defected — agent is the victim
+            checkAgentDeath(result.agentIdx)
+          }
+          // If agent defected on player, player can't die this way
+        } else {
+          // Agent-agent: check the victim
+          if (result.spectrumValue <= 0.5) {
+            checkAgentDeath(result.agent2Idx) // agent2 is victim
+          } else {
+            checkAgentDeath(result.agentIdx) // agent1 is victim
+          }
+        }
+      } else {
+        // Mutual defect — both could die
+        checkAgentDeath(result.agentIdx)
+        // For agent-agent, check second agent too (use adjusted index after potential splice)
+        if (!result.isPlayerBond && result.agent2Idx >= 0) {
+          // If agentIdx was removed and agent2Idx was after it, adjust
+          const adj = result.agent2Idx > result.agentIdx && !state.agents.agents[result.agentIdx + 1] ? result.agent2Idx - 1 : result.agent2Idx
+          checkAgentDeath(adj)
+        }
+      }
+    }
   }
 
   rebuildConnectionLines(state)
@@ -980,6 +1165,53 @@ export function updateWorld(state: WorldState, dt: number, viewportWidth: number
   updateStarField(state.starField, state.tree, karma, dt, state.time)
   updateFragments(state, dt)
   checkFragmentTriggers(state)
+
+  // Agent spawning from healthy rain-nourished leaves
+  // The world replenishes itself — healthy leaves can bud new agents
+  if (state.agents.agents.length < 60 && Math.random() < 0.004) {
+    const healthyLeaves = state.tree.leaves.filter(l => l.health > 0.7 && l.index > 0)
+    if (healthyLeaves.length > 0) {
+      const spawnLeaf = healthyLeaves[Math.floor(Math.random() * healthyLeaves.length)]
+      // Karma biases which strategies emerge — good world = more prosocial strategies
+      const _unused_roll = Math.random()
+      const segCount = 7 + Math.floor(Math.random() * 4)
+      const segments: import('./centipede').Segment[] = []
+      for (let i = 0; i < segCount; i++) {
+        const x = spawnLeaf.x - i * 14
+        segments.push({ x, y: spawnLeaf.y, prevX: x, prevY: spawnLeaf.y })
+      }
+      // Strategy distribution for spawned agents mirrors world karma
+      const strategies: import('./agents').AgentPersonality[] = [
+        'tit_for_tat', 'generous_tft', 'generous_tft', 'forgiving_tft',
+        'pavlov', 'simpleton', 'always_coop', 'detective', 'joss', 'random', 'always_defect', 'grudger',
+      ]
+      const strat = strategies[Math.floor(Math.random() * strategies.length)]
+
+      state.agents.agents.push({
+        centipede: {
+          segments, segmentSpacing: 14, maxSegments: 80,
+          currentLeaf: spawnLeaf.index, onGround: false, state: 'crawling' as const, direction: 1,
+        },
+        personality: strat,
+        currentLeaf: spawnLeaf.index,
+        targetLeaf: -1,
+        goalLeaf: -1,
+        hopProgress: 0,
+        hopDuration: 0.8,
+        thinkTimer: 0.5 + Math.random(),
+        goalTimer: 0,
+        phase: Math.random() * Math.PI * 2,
+        state: 'wandering' as const,
+        homeDepth: Math.random(),
+        lastBondResult: null,
+        prevBondResult: null,
+        lastOwnMove: -1,
+        everBetrayed: false,
+        bondCount: 0,
+      })
+    }
+  }
+
   periodicSave(state, dt)
 }
 
@@ -1779,7 +2011,7 @@ function updateFlashes(state: WorldState, _dt: number): void {
 }
 
 function updateSmoothKarma(state: WorldState): void {
-  const lerpRate = 0.06 // ~1 second visual transition
+  const lerpRate = 0.15 // fast tracking — world reacts in 2-3 seconds
   const sk = state.smoothKarma
   const k = state.karma
   sk.beauty += (k.beauty - sk.beauty) * lerpRate

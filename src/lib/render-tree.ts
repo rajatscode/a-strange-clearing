@@ -10,6 +10,34 @@ function onScreen(x: number, y: number, cam: Camera, w: number, h: number, margi
   return x >= cam.x - margin && x <= cam.x + w + margin && y >= cam.y - margin && y <= cam.y + h + margin
 }
 
+// Organic leaf shape — pointed tips, asymmetric curves, seeded variation
+function drawLeafPath(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number,
+  w: number, h: number,
+  seed: number,
+): void {
+  // Slight asymmetry from seed
+  const asym = Math.sin(seed * 5.3) * 0.12
+  const tipSharp = 0.85 + Math.sin(seed * 7.1) * 0.1 // how pointy the tips are
+
+  // Left tip
+  ctx.moveTo(cx - w, cy + h * asym)
+  // Top edge — curves up with some irregularity
+  ctx.bezierCurveTo(
+    cx - w * 0.55, cy - h * (1.3 + asym),
+    cx + w * 0.5, cy - h * (1.4 - asym),
+    cx + w * tipSharp, cy + h * asym * 0.5,
+  )
+  // Right tip connects to bottom edge
+  ctx.bezierCurveTo(
+    cx + w * 0.55, cy + h * (1.1 + asym * 0.5),
+    cx - w * 0.5, cy + h * (1.2 - asym * 0.3),
+    cx - w, cy + h * asym,
+  )
+  ctx.closePath()
+}
+
 // Draw the full tree: branches then leaves
 // Call this inside the camera transform (after ctx.translate(-cam.x, -cam.y))
 export function drawTree(
@@ -22,10 +50,11 @@ export function drawTree(
   scale: number,
   reachableLeaves?: Set<number>,
   currentLeaf?: number,
+  starCount?: number,
 ): void {
   // No branches drawn — just floating leaf pads in a void
   drawGround(ctx, tree, cam, viewportW, viewportH, scale, time)
-  drawLeaves(ctx, tree, cam, viewportW, viewportH, time, scale, reachableLeaves, currentLeaf)
+  drawLeaves(ctx, tree, cam, viewportW, viewportH, time, scale, reachableLeaves, currentLeaf, starCount ?? 0)
 }
 
 // Draw a subtle ground plane at the bottom of the world
@@ -125,6 +154,7 @@ function drawLeaves(
   scale: number,
   reachableLeaves?: Set<number>,
   currentLeaf?: number,
+  starCount: number = 0,
 ): void {
   for (let i = 0; i < tree.leaves.length; i++) {
     const leaf = tree.leaves[i]
@@ -135,7 +165,7 @@ function drawLeaves(
 
     const isReachable = reachableLeaves?.has(i) ?? false
     const isCurrent = i === currentLeaf
-    drawLeaf(ctx, leaf, time, scale, isReachable, isCurrent)
+    drawLeaf(ctx, leaf, time, scale, isReachable, isCurrent, starCount)
   }
 }
 
@@ -148,69 +178,122 @@ function drawLeaf(
   scale: number,
   isReachable: boolean = false,
   isCurrent: boolean = false,
+  starCount: number = 0,
 ): void {
   const { x, y, health, size, phase } = leaf
 
+  // Star-driven ambient light multiplier: 0 stars = 40% brightness, 15+ = 100%
+  const starGlow = 0.4 + Math.min(1, starCount / 15) * 0.6
+
   const pulse = 1 + Math.sin(time * 1.5 + phase) * 0.05
 
+  // Leaf shrinks when nearly dead (health < 0.1)
+  const shrinkFactor = health < 0.1 ? 0.5 + health * 5 : 1.0
+
   // Leaf platform dimensions — wide, thin
-  const leafWidth = (size * 3 + 20) * scale * pulse
-  const leafHeight = (size * 0.6 + 3) * scale * pulse
+  const leafWidth = (size * 3 + 20) * scale * pulse * shrinkFactor
+  const leafHeight = (size * 0.6 + 3) * scale * pulse * shrinkFactor
 
-  // Color based on health
-  const hue = 80 + health * 80       // 80 (yellow-green) → 160 (cyan-green)
-  const sat = 25 + health * 50       // 25% → 75%
-  const lit = 15 + health * 30       // 15% → 45%
+  // Color based on health — dramatic shift: healthy = vibrant teal, dying = gray/brown
+  const hue = health > 0.3 ? 80 + health * 80 : 30 + health * 167  // dying → brownish 30-80
+  const sat = health > 0.3 ? 25 + health * 55 : 5 + health * 67    // dying → nearly gray
+  const lit = health > 0.1 ? 15 + health * 30 : 6 + health * 90    // dying → very dim
 
-  const baseAlpha = Math.max(0.15, health * 0.7)
-  const alpha = isReachable ? Math.max(baseAlpha, 0.6) : isCurrent ? Math.max(baseAlpha, 0.8) : baseAlpha
+  const rawAlpha = health < 0.1 ? 0.08 + health * 0.7 : Math.max(0.15, health * 0.7)
+  const baseAlpha = rawAlpha * starGlow // stars dim/brighten all leaves globally
+  const alpha = isReachable ? Math.max(baseAlpha, 0.6 * starGlow) : isCurrent ? Math.max(baseAlpha, 0.8 * starGlow) : baseAlpha
 
-  // Soft glow underneath (ambient light)
-  const glowAlpha = alpha * 0.08
+  // Tilt angle seeded from leaf phase — each leaf has unique orientation
+  const tilt = Math.sin(phase * 3.7) * 0.15
+
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.rotate(tilt)
+
+  // ── Shadow/depth: dark shape offset slightly down ──
   ctx.beginPath()
-  ctx.ellipse(x, y + leafHeight, leafWidth * 1.5, leafHeight * 4, 0, 0, Math.PI * 2)
-  ctx.fillStyle = `hsla(${hue}, ${sat}%, ${lit + 10}%, ${glowAlpha})`
+  drawLeafPath(ctx, 0, leafHeight * 0.3, leafWidth, leafHeight, phase)
+  ctx.fillStyle = `hsla(${hue}, ${sat * 0.3}%, ${Math.max(3, lit - 15)}%, ${alpha * 0.3})`
   ctx.fill()
 
-  // Reachable indicator — pulsing glow
-  if (isReachable) {
-    const ringPulse = 0.4 + Math.sin(time * 3 + phase) * 0.3
-    ctx.beginPath()
-    ctx.ellipse(x, y, leafWidth * 1.3, leafHeight * 2.5, 0, 0, Math.PI * 2)
-    ctx.strokeStyle = `hsla(170, 70%, 65%, ${ringPulse * 0.35})`
-    ctx.lineWidth = 1.5 * scale
-    ctx.stroke()
-  }
-
-  // Current leaf warm highlight
-  if (isCurrent) {
-    const cp = 0.5 + Math.sin(time * 2) * 0.2
-    ctx.beginPath()
-    ctx.ellipse(x, y, leafWidth * 1.2, leafHeight * 2, 0, 0, Math.PI * 2)
-    ctx.fillStyle = `hsla(45, 80%, 60%, ${cp * 0.1})`
-    ctx.fill()
-  }
-
-  // Main leaf body — wide ellipse (platform feel)
+  // ── Main leaf body ──
   ctx.beginPath()
-  ctx.ellipse(x, y, leafWidth, leafHeight, 0, 0, Math.PI * 2)
+  drawLeafPath(ctx, 0, 0, leafWidth, leafHeight, phase)
   ctx.fillStyle = `hsla(${hue}, ${sat}%, ${lit}%, ${alpha})`
   ctx.fill()
 
-  // Leaf vein / highlight — lighter stripe down the middle
+  // ── Second layer offset: paper-mache layered feel ──
   ctx.beginPath()
-  ctx.ellipse(x, y - leafHeight * 0.2, leafWidth * 0.7, leafHeight * 0.3, 0, 0, Math.PI * 2)
-  ctx.fillStyle = `hsla(${hue + 10}, ${Math.min(100, sat + 15)}%, ${Math.min(70, lit + 15)}%, ${alpha * 0.4})`
+  drawLeafPath(ctx, leafWidth * 0.03, -leafHeight * 0.1, leafWidth * 0.9, leafHeight * 0.85, phase + 1)
+  ctx.fillStyle = `hsla(${hue + 8}, ${Math.min(100, sat + 5)}%, ${Math.min(60, lit + 6)}%, ${alpha * 0.35})`
   ctx.fill()
 
-  // Leaf edge glow — bioluminescent rim
-  if (health > 0.3) {
+  // ── Central vein — thick, prominent ──
+  ctx.beginPath()
+  ctx.moveTo(-leafWidth * 0.8, 0)
+  ctx.quadraticCurveTo(0, -leafHeight * 0.15, leafWidth * 0.8, 0)
+  ctx.strokeStyle = `hsla(${hue + 15}, ${Math.min(80, sat + 10)}%, ${Math.min(55, lit + 10)}%, ${alpha * 0.6})`
+  ctx.lineWidth = 2 * scale
+  ctx.stroke()
+
+  // ── Side veins — curve outward from the central vein ──
+  if (health > 0.1) {
+    const veinAlpha = alpha * 0.35
+    ctx.strokeStyle = `hsla(${hue + 10}, ${sat}%, ${Math.min(55, lit + 8)}%, ${veinAlpha})`
+    ctx.lineWidth = 1.2 * scale
+    const veinCount = Math.max(3, Math.floor(leafWidth / (12 * scale)))
+    for (let v = 1; v <= veinCount; v++) {
+      const t = v / (veinCount + 1)
+      const vx = -leafWidth * 0.6 + leafWidth * 1.2 * t
+      const spread = leafHeight * 1.0 * (1 - Math.pow(Math.abs(t - 0.5) * 2, 1.5))
+      // Veins curve outward
+      ctx.beginPath()
+      ctx.moveTo(vx, 0)
+      ctx.quadraticCurveTo(vx + leafWidth * 0.06, -spread * 0.6, vx + leafWidth * 0.03, -spread)
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.moveTo(vx, 0)
+      ctx.quadraticCurveTo(vx + leafWidth * 0.06, spread * 0.5, vx + leafWidth * 0.03, spread * 0.85)
+      ctx.stroke()
+    }
+  }
+
+  // ── Edge: visible border, slightly rough ──
+  ctx.beginPath()
+  drawLeafPath(ctx, 0, 0, leafWidth, leafHeight, phase)
+  const rimAlpha = health > 0.5 ? alpha * 0.5 : alpha * 0.2
+  ctx.strokeStyle = `hsla(${hue + 20}, ${Math.min(80, sat + 15)}%, ${Math.min(65, lit + 18)}%, ${rimAlpha})`
+  ctx.lineWidth = (health > 0.5 ? 2.5 : 1.5) * scale
+  ctx.stroke()
+
+  // ── Reachable shimmer ──
+  if (isReachable) {
+    const ringPulse = 0.4 + Math.sin(time * 3 + phase) * 0.3
     ctx.beginPath()
-    ctx.ellipse(x, y, leafWidth, leafHeight, 0, 0, Math.PI * 2)
-    ctx.strokeStyle = `hsla(${hue + 20}, ${Math.min(90, sat + 20)}%, ${Math.min(75, lit + 25)}%, ${alpha * 0.3 * health})`
+    drawLeafPath(ctx, 0, 0, leafWidth * 1.15, leafHeight * 1.3, phase)
+    ctx.strokeStyle = `hsla(170, 70%, 65%, ${ringPulse * 0.3})`
     ctx.lineWidth = 1.5 * scale
     ctx.stroke()
   }
+
+  // ── Current leaf warm highlight ──
+  if (isCurrent) {
+    const cp = 0.3 + Math.sin(time * 2) * 0.15
+    ctx.beginPath()
+    drawLeafPath(ctx, 0, 0, leafWidth * 1.05, leafHeight * 1.1, phase)
+    ctx.fillStyle = `hsla(45, 70%, 55%, ${cp * 0.08})`
+    ctx.fill()
+  }
+
+  // ── Subtle ambient glow underneath (much less dominant than before) ──
+  if (health > 0.3) {
+    ctx.beginPath()
+    ctx.ellipse(0, leafHeight * 0.5, leafWidth * 0.8, leafHeight * 2, 0, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${hue}, ${sat}%, ${lit + 15}%, ${alpha * 0.06})`
+    ctx.fill()
+  }
+
+  ctx.restore()
 }
 
 // Draw the dark void background with karma-reactive color
@@ -223,48 +306,60 @@ export function drawVoidBackground(
   starDensity?: number,
 ): void {
   if (!karma) {
-    // Fallback to original static background
     ctx.fillStyle = '#030308'
     ctx.fillRect(0, 0, w, h)
     return
   }
 
-  const beauty = karma.beauty
   const corruption = karma.corruption
-  const stars = starDensity ?? 0
+  const s = Math.max(0, starDensity ?? 0)
+  const corruptDrain = Math.max(0, 1 - corruption * 0.4)
 
-  // Base color interpolation:
-  // Beautiful world: very dark blue-green (#030812)
-  // Corrupt world: pure black (#010102) with sickly olive tinge
-  const beautyWeight = Math.max(0, beauty - corruption * 0.5)
-  const corruptWeight = Math.max(0, corruption - beauty * 0.3)
+  // UTC time drives the base color palette — each visit feels different
+  const hours = Date.now() / 1000 / 3600
+  const utcHue = (Math.sin(hours / 24 * Math.PI * 2) * 30 + Math.sin(hours / 120 * Math.PI * 2 + 1.7) * 20)
+  // utcHue drifts ±50 around 0 — shifts the entire world's tint
+  const utcWarm = Math.sin(hours / 7.5 * Math.PI * 2 + 0.4) * 0.5 + 0.5 // 0-1 warmth cycle
 
-  // Base RGB values
-  const r = Math.round(3 - corruptWeight * 2 + beautyWeight * 0)
-  const g = Math.round(3 + beautyWeight * 5 - corruptWeight * 2 + corruptWeight * 1)
-  const b = Math.round(8 + beautyWeight * 10 - corruptWeight * 6)
+  // Star density DRAMATICALLY drives background brightness
+  // UTC time shifts the HUE of that brightness
+  const starT = Math.min(1, s / 20)
 
-  const baseR = Math.max(1, Math.min(15, r))
-  const baseG = Math.max(1, Math.min(15, g))
-  const baseB = Math.max(2, Math.min(20, b))
+  // Base RGB from star density, tinted by UTC
+  const tintR = 0.3 + utcWarm * 0.4 // warmer times = more red
+  const tintG = 0.5 + (1 - utcWarm) * 0.3 // cooler times = more green
+  const tintB = 0.8 + Math.sin(utcHue * 0.02) * 0.2 // always bluish, varies
+
+  const maxBright = 60 // maximum RGB component at full stars
+  const baseR = Math.round(starT * maxBright * tintR * corruptDrain)
+  const baseG = Math.round(starT * maxBright * tintG * corruptDrain)
+  const baseB = Math.round(starT * maxBright * tintB * corruptDrain)
 
   ctx.fillStyle = `rgb(${baseR}, ${baseG}, ${baseB})`
   ctx.fillRect(0, 0, w, h)
 
-  // Ambient glow for beautiful worlds — faint warm glow from below
-  if (beauty > 0.3 && corruption < 0.5) {
-    const glowAlpha = Math.max(0, (beauty - 0.3) * 0.07)
-    if (glowAlpha > 0.005) {
-      ctx.fillStyle = `rgba(40, 50, 20, ${glowAlpha})`
-      ctx.fillRect(0, h * 0.6, w, h * 0.4)
-    }
+  // Ambient glow for star-rich worlds
+  if (starT > 0.3 && corruption < 0.5) {
+    const glowAlpha = starT * 0.15
+    const glowR = Math.round(40 * tintR)
+    const glowG = Math.round(55 * tintG)
+    const glowB = Math.round(50 * tintB)
+    ctx.fillStyle = `rgba(${glowR}, ${glowG}, ${glowB}, ${glowAlpha})`
+    ctx.fillRect(0, h * 0.5, w, h * 0.5)
   }
 
-  // Star density affects overall brightness (very subtle)
-  if (stars > 6) {
-    const starGlow = Math.min(0.02, (stars - 6) * 0.003)
-    ctx.fillStyle = `rgba(30, 35, 50, ${starGlow})`
-    ctx.fillRect(0, 0, w, h * 0.4)
+  // Sky glow
+  if (s > 3) {
+    const skyGlow = Math.min(0.2, (s - 3) * 0.015)
+    ctx.fillStyle = `rgba(${Math.round(20 * tintR)}, ${Math.round(35 * tintG)}, ${Math.round(60 * tintB)}, ${skyGlow})`
+    ctx.fillRect(0, 0, w, h * 0.5)
+  }
+
+  // Warm horizon for many stars
+  if (s > 10) {
+    const warmGlow = Math.min(0.08, (s - 10) * 0.006)
+    ctx.fillStyle = `rgba(${Math.round(55 * tintR)}, ${Math.round(40 * tintG)}, ${Math.round(25 * tintB)}, ${warmGlow})`
+    ctx.fillRect(0, h * 0.65, w, h * 0.35)
   }
 }
 
@@ -311,16 +406,48 @@ export function drawAtmosphere(
     }
   }
 
-  // Star density darkness: fewer stars = darker world
-  if (starCount <= 2 && corruption > 0.2) {
-    const despairAlpha = Math.min(0.15, (1 - starCount / 3) * 0.15)
+  // === STAR-COUNT FOG: fewer stars = world goes VERY DARK ===
+  if (starCount < 15) {
+    // 0 stars: fog alpha 0.55, 15 stars: 0 — this is DRAMATIC
+    const starFogAlpha = Math.max(0, (1 - starCount / 15) * 0.55)
+    if (starFogAlpha > 0.01) {
+      ctx.save()
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.fillStyle = `rgba(0, 0, 0, ${starFogAlpha})`
+      ctx.fillRect(0, 0, w, h)
+      ctx.restore()
+    }
+  }
+
+  // === VIGNETTE: stars DOMINATE field of view ===
+  // 0 stars = you can barely see past your nose
+  // 20+ stars = wide open, clear day
+  const starVisibility = Math.min(1, starCount / 20)
+
+  // Stars contribute 80%, karma 20% — stars are the primary driver
+  const worldHealth = beauty * 0.6 + (1 - corruption) * 0.4
+  const combinedVisibility = starVisibility * 0.8 + worldHealth * 0.2
+
+  const vignetteStrength = Math.max(0, 1 - combinedVisibility)
+  const vignetteAlpha = vignetteStrength * 0.9 // max 0.9 opacity — nearly blind at 0 stars
+
+  if (vignetteAlpha > 0.02) {
     ctx.save()
     ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.fillStyle = `rgba(0, 0, 0, ${despairAlpha})`
+
+    const cx = w / 2, cy = h / 2
+    const screenDiag = Math.max(w, h)
+    // 0 stars: innerR = 20% of screen (extreme tunnel). Many stars: innerR = 70%
+    const innerR = screenDiag * (0.2 + combinedVisibility * 0.5)
+    // outerR: tight when dark, wide when bright
+    const outerR = screenDiag * (0.55 + combinedVisibility * 0.4)
+    const grad = ctx.createRadialGradient(cx, cy, innerR, cx, cy, outerR)
+    grad.addColorStop(0, `rgba(0, 0, 0, 0)`)
+    grad.addColorStop(1, `rgba(0, 0, 0, ${vignetteAlpha})`)
+    ctx.fillStyle = grad
     ctx.fillRect(0, 0, w, h)
     ctx.restore()
   }
 
-  // Suppress unused variable warning
   void cam
 }

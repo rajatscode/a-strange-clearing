@@ -184,19 +184,23 @@ export function generateTree(seed: number, viewportWidth: number, viewportHeight
   // Layer definitions: [count, hSpacingMin, hSpacingMax, yMin, yMax, sizeMin, sizeMax]
   type LayerDef = { count: number; hMin: number; hMax: number; yMinOff: number; yMaxOff: number; sizeMin: number; sizeMax: number }
   const layers: LayerDef[] = [
-    // Bottom layer — VERY dense, trivially reachable from ground (within 144px)
+    // Bottom layer — dense, trivially reachable from ground
     { count: 40, hMin: 30, hMax: 60, yMinOff: 40, yMaxOff: 80, sizeMin: 18, sizeMax: 28 },
     // Lower canopy
-    { count: 60, hMin: 60, hMax: 100, yMinOff: 100, yMaxOff: 300, sizeMin: 16, sizeMax: 26 },
+    { count: 55, hMin: 60, hMax: 100, yMinOff: 100, yMaxOff: 300, sizeMin: 16, sizeMax: 26 },
     // Mid canopy
-    { count: 50, hMin: 100, hMax: 160, yMinOff: 300, yMaxOff: 600, sizeMin: 15, sizeMax: 24 },
+    { count: 50, hMin: 80, hMax: 140, yMinOff: 300, yMaxOff: 600, sizeMin: 15, sizeMax: 24 },
     // Upper canopy
-    { count: 30, hMin: 150, hMax: 250, yMinOff: 600, yMaxOff: 1000, sizeMin: 15, sizeMax: 22 },
+    { count: 45, hMin: 80, hMax: 140, yMinOff: 600, yMaxOff: 1000, sizeMin: 15, sizeMax: 22 },
     // Near stellar nursery
-    { count: 20, hMin: 200, hMax: 350, yMinOff: 1000, yMaxOff: 1500, sizeMin: 15, sizeMax: 20 },
+    { count: 50, hMin: 70, hMax: 130, yMinOff: 1000, yMaxOff: 1500, sizeMin: 14, sizeMax: 20 },
+    // Stellar approach — dense path into the star field
+    { count: 45, hMin: 70, hMax: 120, yMinOff: 1500, yMaxOff: 2200, sizeMin: 12, sizeMax: 18 },
+    // Among the stars — sparse platforms in the sky itself
+    { count: 25, hMin: 100, hMax: 200, yMinOff: 2200, yMaxOff: 2800, sizeMin: 10, sizeMax: 16 },
   ]
 
-  const totalMaxHeight = 1500 // total height of leaf field
+  const totalMaxHeight = 2800 // leaves reach well into the star field
 
   for (const layer of layers) {
     for (let i = 0; i < layer.count; i++) {
@@ -510,13 +514,36 @@ export function walkAlongBranch(
   }
 }
 
-// Update leaf health over time — leaves slowly wither without nourishment
+// Update leaf health over time
+// Lower leaves wither slower and passively regenerate (roots/ground moisture)
+// Upper leaves depend entirely on stellar rain
 export function updateLeafHealth(tree: Tree, dt: number, worldKarmaBeauty: number): void {
-  const witherRate = 0.003 * (1 - worldKarmaBeauty * 0.7)
+  const baseWither = 0.005 * (1 - worldKarmaBeauty * 0.6)
   for (const leaf of tree.leaves) {
-    if (leaf.health <= 0) continue
-    leaf.health = Math.max(0, leaf.health - dt * witherRate)
-    leaf.glowIntensity = leaf.health * (0.6 + Math.sin(leaf.phase) * 0.4)
+    if (leaf.health <= 0) {
+      leaf.glowIntensity = 0
+      // Dead leaves slowly regenerate near the bottom (ground moisture)
+      if (leaf.depth < 0.2) {
+        leaf.health = Math.min(0.3, leaf.health + dt * 0.002)
+      }
+      continue
+    }
+
+    // Wither rate scales with height: bottom leaves wither 3× slower
+    const heightFactor = 0.3 + leaf.depth * 0.7 // 0.3 at bottom, 1.0 at top
+    leaf.health = Math.max(0, leaf.health - dt * baseWither * heightFactor)
+
+    // Passive regeneration for lower leaves (ground moisture / roots)
+    if (leaf.depth < 0.3) {
+      const regenRate = 0.003 * (0.3 - leaf.depth) * (1 + worldKarmaBeauty) // stronger in good world
+      leaf.health = Math.min(0.6, leaf.health + dt * regenRate) // caps at 60% from ground alone
+    }
+
+    if (leaf.health <= 0) {
+      leaf.glowIntensity = 0
+    } else {
+      leaf.glowIntensity = leaf.health * (0.6 + Math.sin(leaf.phase) * 0.4)
+    }
   }
 }
 
@@ -532,8 +559,9 @@ export function updateLeaves(tree: Tree, _dt: number, time: number): void {
     // Ground leaf stays put
     if (leaf.index === 0) continue
 
-    // Sinusoidal bob offset by phase, amplitude 3-5px
-    const amplitude = 3 + leaf.size * 0.15
+    // Sinusoidal bob — amplitude scales with health (dying leaves are still)
+    const healthScale = Math.max(0.05, leaf.health)
+    const amplitude = (3 + leaf.size * 0.15) * healthScale
     leaf.x = leaf.baseX + Math.sin(time * 1.2 + leaf.phase) * amplitude * 0.3
     leaf.y = leaf.baseY + Math.sin(time * 0.8 + leaf.phase * 1.4) * amplitude
   }

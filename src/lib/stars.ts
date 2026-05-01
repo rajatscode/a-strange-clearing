@@ -15,6 +15,7 @@ export type Star = {
   birthTime: number
   lifespan: number     // total lifespan in seconds (30-60)
   rainTimer: number    // accumulator for rain emission
+  blackDustDamage: number  // accumulated damage from black dust
 }
 
 export type RainDrop = {
@@ -35,18 +36,27 @@ export type DustParticle = {
   life: number          // 0-1, decreases over time
 }
 
+export type StarScar = {
+  x: number
+  y: number
+  radius: number
+  alpha: number      // fades over time
+  fromBlackDust: boolean  // darker scar if killed by corruption
+}
+
 export type StarField = {
   stars: Star[]
   rain: RainDrop[]
   dust: DustParticle[]
+  scars: StarScar[]
 }
 
 // Create initial star field with starter stars visible in the sky region
 export function createStarField(tree: Tree): StarField {
   // Stars should be above the leaf field but within the world bounds
   // Leaf field goes up to ~1500px above ground, stars live above that
-  const skyBaseY = tree.originY - 1600  // just above the leaf field
-  const starCount = 5 + Math.floor(Math.random() * 4) // 5-8 starters
+  const skyBaseY = tree.originY - 2000  // lower so stars are more visible from leaves
+  const starCount = 20 + Math.floor(Math.random() * 8) // 20-27 starters — sky BURNS
 
   const stars: Star[] = []
   // Use a wide horizontal spread so stars are visible when looking up
@@ -59,12 +69,13 @@ export function createStarField(tree: Tree): StarField {
       life: 0.4 + Math.random() * 0.6, // start partially through lifespan
       phase: Math.random() * Math.PI * 2,
       birthTime: 0,
-      lifespan: 30 + Math.random() * 30,
+      lifespan: 10 + Math.random() * 15,
       rainTimer: 0,
+      blackDustDamage: 0,
     })
   }
 
-  return { stars, rain: [], dust: [] }
+  return { stars, rain: [], dust: [], scars: [] }
 }
 
 // Update the full star field each frame
@@ -78,6 +89,7 @@ export function updateStarField(
   updateStars(field, tree, karma, dt, time)
   updateRain(field, tree, dt)
   updateDust(field, tree, dt, time)
+  updateScars(field, dt)
 }
 
 function updateStars(
@@ -95,11 +107,11 @@ function updateStars(
     star.life -= dt / star.lifespan
 
     // Brightness tracks life with a pulse
-    star.brightness = star.life * (0.7 + Math.sin(time * 2 + star.phase) * 0.15 + Math.sin(time * 0.8 + star.phase * 1.7) * 0.15)
+    star.brightness = star.life * (0.5 + Math.sin(time * 2 + star.phase) * 0.3 + Math.sin(time * 0.8 + star.phase * 1.7) * 0.2)
 
     // Emit rain while alive — rate depends on brightness and karma beauty
     if (star.life > 0.05) {
-      const rainRate = 0.15 + karma.beauty * 0.25 // drops per second
+      const rainRate = 0.8 + karma.beauty * 1.0 // drops per second (2x faster)
       star.rainTimer += dt * rainRate
 
       while (star.rainTimer >= 1) {
@@ -115,6 +127,22 @@ function updateStars(
       for (let j = 0; j < burstCount; j++) {
         emitRainDrop(field, star, tree)
       }
+
+      // Leave a scar
+      const scarFromBlack = star.blackDustDamage > 0.1
+      field.scars.push({
+        x: star.x,
+        y: star.y,
+        radius: 20 + star.brightness * 30,
+        alpha: 1.0,
+        fromBlackDust: scarFromBlack,
+      })
+
+      // Chain reaction: black dust cascade if killed by corruption
+      if (scarFromBlack) {
+        addDust(field, star.x, star.y, false, star.blackDustDamage * 3)
+      }
+
       field.stars.splice(i, 1)
     }
   }
@@ -124,7 +152,7 @@ function emitRainDrop(field: StarField, star: Star, tree: Tree): void {
   if (field.rain.length >= 80) return // cap rain drops
 
   // Find a leaf below the star within horizontal range
-  const hRange = 200 // horizontal search range from star
+  const hRange = 400 // wide search — rain drifts far as it falls
   const candidates: number[] = []
   for (let i = 0; i < tree.leaves.length; i++) {
     const leaf = tree.leaves[i]
@@ -143,7 +171,7 @@ function emitRainDrop(field: StarField, star: Star, tree: Tree): void {
   field.rain.push({
     x: star.x + (Math.random() - 0.5) * 20,
     y: star.y + Math.random() * 10,
-    vy: 80 + Math.random() * 60, // pixels per second downward
+    vy: 150 + Math.random() * 100, // pixels per second downward
     brightness: 0.6 + Math.random() * 0.4,
     targetLeafIndex: targetIdx,
   })
@@ -175,7 +203,7 @@ function updateRain(field: StarField, tree: Tree, dt: number): void {
       const dy = drop.y - leaf.y
       const hitRadius = leaf.size * 3 + 15
       if (dx * dx + dy * dy < hitRadius * hitRadius) {
-        nourishLeaf(leaf, 0.08)
+        nourishLeaf(leaf, 0.2)
         hit = true
       }
     }
@@ -203,44 +231,73 @@ function updateDust(field: StarField, tree: Tree, dt: number, time: number): voi
 
     dust.life -= dt * 0.03 // slow fade
 
+    // Black dust seeks nearest star
+    if (!dust.golden) {
+      let nearestStarDist = Infinity
+      let nearestStar: Star | null = null
+      for (const star of field.stars) {
+        const dx = star.x - dust.x
+        const dy = star.y - dust.y
+        const d = dx * dx + dy * dy
+        if (d < nearestStarDist) { nearestStarDist = d; nearestStar = star }
+      }
+      if (nearestStar) {
+        const dx = nearestStar.x - dust.x
+        const dy = nearestStar.y - dust.y
+        const d = Math.sqrt(dx * dx + dy * dy)
+        if (d > 1) {
+          // Steer toward nearest star
+          const seekSpeed = 80
+          dust.vx += (dx / d) * seekSpeed * dt
+          dust.vy += (dy / d) * seekSpeed * dt
+        }
+        // Impact: close enough to damage
+        if (d < 30) {
+          nearestStar.life -= 0.08
+          nearestStar.blackDustDamage = (nearestStar.blackDustDamage || 0) + 0.08
+          field.dust.splice(i, 1)
+          continue
+        }
+      }
+    }
+
     // Golden dust reaching sky region can accrete into a star
     if (dust.golden && dust.y < skyY) {
-      if (field.stars.length < 12 && Math.random() < 0.08) {
-        field.stars.push({
+      if (field.stars.length < 40 && Math.random() < 0.2) {
+        const newStar: Star = {
           x: dust.x,
           y: dust.y,
-          brightness: 0.8,
+          brightness: 1.0,
           life: 1.0,
           phase: Math.random() * Math.PI * 2,
           birthTime: time,
-          lifespan: 30 + Math.random() * 30,
+          lifespan: 10 + Math.random() * 15,
           rainTimer: 0,
-        })
+          blackDustDamage: 0,
+        }
+        field.stars.push(newStar)
+        // Birth burst: 5-8 rain drops immediately
+        const burstCount = 5 + Math.floor(Math.random() * 4)
+        for (let b = 0; b < burstCount; b++) {
+          emitRainDrop(field, newStar, tree)
+        }
       }
       // Golden dust consumed when it reaches the sky
       field.dust.splice(i, 1)
       continue
     }
 
-    // Black dust reaching a star corrodes it
-    if (!dust.golden && dust.y < skyY) {
-      for (let j = 0; j < field.stars.length; j++) {
-        const star = field.stars[j]
-        const dx = dust.x - star.x
-        const dy = dust.y - star.y
-        if (dx * dx + dy * dy < 150 * 150) {
-          star.life -= 0.05 // corrode the star
-          field.dust.splice(i, 1)
-          break
-        }
-      }
-      if (i >= field.dust.length) continue // was removed
-    }
-
     // Remove if faded or risen way above
     if (dust.life <= 0 || dust.y < skyY - 500) {
       field.dust.splice(i, 1)
     }
+  }
+}
+
+function updateScars(field: StarField, dt: number): void {
+  for (let i = field.scars.length - 1; i >= 0; i--) {
+    field.scars[i].alpha -= dt * (field.scars[i].fromBlackDust ? 0.008 : 0.012)
+    if (field.scars[i].alpha <= 0) field.scars.splice(i, 1)
   }
 }
 
@@ -253,14 +310,14 @@ export function addDust(
   amount: number,
 ): void {
   const count = Math.min(Math.floor(amount), 30) // cap per burst
-  if (field.dust.length + count > 200) return // global cap
+  if (field.dust.length + count > 400) return // global cap
 
   for (let i = 0; i < count; i++) {
     field.dust.push({
       x: x + (Math.random() - 0.5) * 30,
       y: y + (Math.random() - 0.5) * 20,
       vx: (Math.random() - 0.5) * 15,
-      vy: -(40 + Math.random() * 40), // rise upward
+      vy: -(120 + Math.random() * 105), // rise upward (50% faster)
       brightness: 0.5 + Math.random() * 0.5,
       golden,
       life: 1.0,

@@ -1,11 +1,42 @@
-// Centipede rendering — bioluminescent glowing segments connected by thin light threads
-// Draw order: glow layer (larger, dimmer) first, then solid segments on top
+// Caterpillar rendering — The Very Hungry Caterpillar aesthetic
+//
+// Plump oval segments that overlap, distinct head with eyes and antennae,
+// tiny feet underneath, highlight sheen on top for 3D feel.
+// Each individual has unique color variation (seeded by index, NOT personality).
 
 import type { Centipede } from './centipede'
 
 type Camera = { x: number; y: number }
 
-/** Render the centipede in world space. Call within a ctx.save()/restore() that has camera transform applied. */
+// Seeded color palette per individual — NOT tied to personality
+function getColorPalette(seed: number, isPlayer: boolean) {
+  if (isPlayer) {
+    return {
+      headHue: 8,        // rich red head (like the book!)
+      bodyHue: 120,       // green body
+      bodySat: 55,
+      bodyLit: 42,
+      sheenLit: 62,
+      glowHue: 90,
+    }
+  }
+  // Each agent gets a unique but subtle variation
+  // Hash the seed into a hue range — all natural/earthy tones
+  const h = ((seed * 137.5) % 360)
+  // Restrict to natural caterpillar colors: greens, browns, olives, teals
+  const hueOptions = [85, 95, 110, 130, 145, 160, 50, 65, 35, 170]
+  const baseHue = hueOptions[Math.floor(Math.abs(Math.sin(seed * 7.3)) * hueOptions.length)]
+  const hueShift = ((h % 20) - 10) // ±10 variation
+  return {
+    headHue: (baseHue + 30 + hueShift) % 360, // head is a shifted tone
+    bodyHue: baseHue + hueShift,
+    bodySat: 40 + (Math.abs(Math.sin(seed * 3.7)) * 20),
+    bodyLit: 35 + (Math.abs(Math.sin(seed * 5.1)) * 15),
+    sheenLit: 55 + (Math.abs(Math.sin(seed * 2.3)) * 15),
+    glowHue: baseHue,
+  }
+}
+
 export function drawCentipede(
   ctx: CanvasRenderingContext2D,
   centipede: Centipede,
@@ -15,15 +46,28 @@ export function drawCentipede(
   vpW: number,
   vpH: number,
   isPlayer: boolean = false,
+  seed: number = 0,
 ): void {
   const { segments } = centipede
   if (segments.length === 0) return
 
-  const margin = 60
-  const totalSegments = segments.length
+  const margin = 80
+  const n = segments.length
+  const pal = getColorPalette(seed, isPlayer)
 
-  // --- PASS 1: Glow layer (larger radii, low alpha) ---
-  for (let i = 0; i < totalSegments; i++) {
+  // --- PASS 1: Soft ambient glow (very subtle, sells bioluminescence) ---
+  const headSeg = segments[0]
+  if (headSeg.x > cam.x - margin && headSeg.x < cam.x + vpW + margin &&
+      headSeg.y > cam.y - margin && headSeg.y < cam.y + vpH + margin) {
+    const glowR = (isPlayer ? 60 : 40) * scale
+    ctx.beginPath()
+    ctx.arc(headSeg.x, headSeg.y, glowR, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${pal.glowHue}, 50%, 60%, ${isPlayer ? 0.06 : 0.04})`
+    ctx.fill()
+  }
+
+  // --- PASS 2: Body segments (back to front for overlap) ---
+  for (let i = n - 1; i >= 0; i--) {
     const seg = segments[i]
 
     // Off-screen culling
@@ -31,99 +75,114 @@ export function drawCentipede(
         seg.y < cam.y - margin || seg.y > cam.y + vpH + margin) continue
 
     const isHead = i === 0
-    // Brightness falls off from head to tail
-    const t = totalSegments > 1 ? i / (totalSegments - 1) : 0
-    const brightness = 1.0 - t * 0.7 // head=1.0, tail=0.3
+    const isTail = i === n - 1
+    const t = n > 1 ? i / (n - 1) : 0 // 0=head, 1=tail
 
-    // Gentle pulse — each segment slightly out of phase for a wave effect
-    const pulse = 0.85 + Math.sin(time * 2.5 + i * 0.4) * 0.15
+    // Segment dimensions — plump ovals, head is bigger
+    const baseW = isHead ? 20 : isTail ? 11 : 14 - t * 3
+    const baseH = isHead ? 17 : isTail ? 10 : 13 - t * 2
+    const pulse = 0.95 + Math.sin(time * 2 + i * 0.5) * 0.05
+    const w = baseW * scale * pulse
+    const h = baseH * scale * pulse
 
-    const glowRadius = (isHead ? 50 : 36 - t * 10) * scale * pulse
-    const glowAlpha = brightness * 0.08 * pulse
-
-    // Outer glow
-    const glowHue = isPlayer ? 45 : 178
-    ctx.beginPath()
-    ctx.arc(seg.x, seg.y, glowRadius, 0, Math.PI * 2)
-    ctx.fillStyle = `hsla(${glowHue}, 60%, 70%, ${glowAlpha})`
-    ctx.fill()
-
-    // Mid glow (tighter, slightly brighter)
-    ctx.beginPath()
-    ctx.arc(seg.x, seg.y, glowRadius * 0.55, 0, Math.PI * 2)
-    ctx.fillStyle = `hsla(${glowHue}, 55%, 75%, ${glowAlpha * 1.5})`
-    ctx.fill()
-  }
-
-  // --- PASS 2: Connecting lines (thin glowing threads between segments) ---
-  if (totalSegments > 1) {
-    ctx.lineCap = 'round'
-    for (let i = 1; i < totalSegments; i++) {
+    // Head NEVER rotates — always upright. Body segments orient along chain.
+    let angle = 0
+    if (!isHead && i > 0) {
       const prev = segments[i - 1]
-      const seg = segments[i]
-
-      // Skip if both off-screen
-      const bothOffScreen =
-        (prev.x < cam.x - margin && seg.x < cam.x - margin) ||
-        (prev.x > cam.x + vpW + margin && seg.x > cam.x + vpW + margin) ||
-        (prev.y < cam.y - margin && seg.y < cam.y - margin) ||
-        (prev.y > cam.y + vpH + margin && seg.y > cam.y + vpH + margin)
-      if (bothOffScreen) continue
-
-      const t = i / (totalSegments - 1)
-      const lineAlpha = (1.0 - t * 0.6) * 0.35
-      const lineWidth = (2.0 - t * 0.8) * scale
-
-      ctx.beginPath()
-      ctx.moveTo(prev.x, prev.y)
-      ctx.lineTo(seg.x, seg.y)
-      ctx.strokeStyle = `hsla(180, 50%, 72%, ${lineAlpha})`
-      ctx.lineWidth = lineWidth
-      ctx.stroke()
+      angle = Math.atan2(prev.y - seg.y, prev.x - seg.x)
     }
-  }
 
-  // --- PASS 3: Solid segments (small bright circles) ---
-  for (let i = totalSegments - 1; i >= 0; i--) {
-    const seg = segments[i]
+    ctx.save()
+    ctx.translate(seg.x, seg.y)
+    ctx.rotate(angle)
 
-    // Off-screen culling
-    if (seg.x < cam.x - margin || seg.x > cam.x + vpW + margin ||
-        seg.y < cam.y - margin || seg.y > cam.y + vpH + margin) continue
+    // Color: gradual hue shift from head to tail
+    const segHue = isHead ? pal.headHue : pal.bodyHue + t * 15
+    const segSat = isHead ? 65 : pal.bodySat - t * 10
+    const segLit = isHead ? 45 : pal.bodyLit + t * 5
 
-    const isHead = i === 0
-    const t = totalSegments > 1 ? i / (totalSegments - 1) : 0
-    const brightness = 1.0 - t * 0.6
-
-    const pulse = 0.9 + Math.sin(time * 2.5 + i * 0.4) * 0.1
-
-    // Segment radius: head is larger, body tapers toward tail
-    const segRadius = isHead
-      ? 18 * scale * pulse
-      : (14 - t * 4) * scale * pulse
-
-    // Player: warm golden-amber. Agents: cool cyan.
-    const hue = isPlayer
-      ? (isHead ? 45 : 55 + t * 10)    // gold → amber
-      : (isHead ? 172 : 180 + t * 8)   // teal → cyan
-    const sat = isPlayer
-      ? (isHead ? 80 : 65 - t * 10)
-      : (isHead ? 65 : 55 - t * 10)
-    const lit = isHead ? 88 : 82 - t * 12
-
-    // Core segment
+    // Main body oval
     ctx.beginPath()
-    ctx.arc(seg.x, seg.y, segRadius, 0, Math.PI * 2)
-    ctx.fillStyle = `hsla(${hue}, ${sat}%, ${lit}%, ${brightness * 0.85})`
+    ctx.ellipse(0, 0, w, h, 0, 0, Math.PI * 2)
+    ctx.fillStyle = `hsl(${segHue}, ${segSat}%, ${segLit}%)`
     ctx.fill()
 
-    // Bright center dot
-    if (isHead || i % 2 === 0) {
-      const dotRadius = segRadius * (isHead ? 0.5 : 0.4)
+    // Sheen highlight (top crescent — 3D plumpness)
+    ctx.beginPath()
+    ctx.ellipse(0, -h * 0.25, w * 0.7, h * 0.4, 0, Math.PI, 0) // top half only
+    ctx.fillStyle = `hsla(${segHue}, ${Math.max(20, segSat - 15)}%, ${pal.sheenLit}%, 0.4)`
+    ctx.fill()
+
+    // Dark underside (subtle shadow)
+    ctx.beginPath()
+    ctx.ellipse(0, h * 0.2, w * 0.8, h * 0.35, 0, 0, Math.PI)
+    ctx.fillStyle = `hsla(${segHue}, ${segSat}%, ${Math.max(15, segLit - 15)}%, 0.3)`
+    ctx.fill()
+
+    // Tiny feet (two nubs on the bottom) — not on head or tail
+    if (!isHead && !isTail) {
+      const footY = h * 0.85
+      const footR = 2.5 * scale
+      ctx.fillStyle = `hsla(${segHue}, ${segSat - 10}%, ${segLit - 10}%, 0.6)`
       ctx.beginPath()
-      ctx.arc(seg.x, seg.y, dotRadius, 0, Math.PI * 2)
-      ctx.fillStyle = `hsla(${hue - 5}, ${Math.min(80, sat + 15)}%, ${Math.min(98, lit + 10)}%, ${brightness * 0.95})`
+      ctx.arc(-w * 0.4, footY, footR, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(w * 0.4, footY, footR, 0, Math.PI * 2)
       ctx.fill()
     }
+
+    // HEAD features — eyes on top, antennae on top. Always upright.
+    if (isHead) {
+      const eyeR = 3 * scale
+      const eyeOffX = w * 0.3
+      const eyeOffY = -h * 0.2
+
+      // Eye whites
+      ctx.fillStyle = `hsla(60, 30%, 90%, 0.9)`
+      ctx.beginPath()
+      ctx.arc(-eyeOffX, eyeOffY, eyeR, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(eyeOffX, eyeOffY, eyeR, 0, Math.PI * 2)
+      ctx.fill()
+
+      // Pupils — look in movement direction
+      const pupilX = scale * 0.7 * (centipede.direction > 0 ? 1 : -1)
+      ctx.fillStyle = `hsla(0, 0%, 10%, 0.85)`
+      ctx.beginPath()
+      ctx.arc(-eyeOffX + pupilX, eyeOffY, eyeR * 0.5, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(eyeOffX + pupilX, eyeOffY, eyeR * 0.5, 0, Math.PI * 2)
+      ctx.fill()
+
+      // Antennae — two lines from top of head
+      const antLen = 12 * scale
+      const antX = w * 0.2
+      ctx.strokeStyle = `hsla(${pal.headHue}, 40%, 50%, 0.6)`
+      ctx.lineWidth = 1.5 * scale
+      ctx.lineCap = 'round'
+
+      ctx.beginPath()
+      ctx.moveTo(-antX, -h * 0.7)
+      ctx.quadraticCurveTo(-antX - 4 * scale, -h * 0.7 - antLen * 0.6, -antX - 2 * scale, -h * 0.7 - antLen)
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(-antX - 2 * scale, -h * 0.7 - antLen, 2 * scale, 0, Math.PI * 2)
+      ctx.fillStyle = `hsla(${pal.headHue + 20}, 50%, 60%, 0.7)`
+      ctx.fill()
+
+      ctx.beginPath()
+      ctx.moveTo(antX, -h * 0.7)
+      ctx.quadraticCurveTo(antX + 4 * scale, -h * 0.7 - antLen * 0.6, antX + 2 * scale, -h * 0.7 - antLen)
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(antX + 2 * scale, -h * 0.7 - antLen, 2 * scale, 0, Math.PI * 2)
+      ctx.fillStyle = `hsla(${pal.headHue + 20}, 50%, 60%, 0.7)`
+      ctx.fill()
+    }
+
+    ctx.restore()
   }
 }

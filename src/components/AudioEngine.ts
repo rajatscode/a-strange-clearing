@@ -18,6 +18,7 @@ export type AudioParams = {
   transcendence: boolean
   corruptionSpread: boolean
   cleanseSuccess: boolean
+  starCount: number
 }
 
 // Lydian pentatonic from D (beautiful state)
@@ -180,6 +181,7 @@ export class AudioEngine {
     const hostility = this.lastParams.hostility ?? 0.1
     const corruption = this.lastParams.corruption ?? 0.1
     const alive = this.lastParams.playerAlive ?? true
+    const starCount = this.lastParams.starCount ?? 5
 
     // Beautiful: frequent (2-4s). Corrupt/hostile: rare (8-15s). Dead: very rare (10-20s).
     let baseInterval: number
@@ -193,6 +195,19 @@ export class AudioEngine {
       baseInterval = 4000 + (1 - beauty) * 6000
     }
 
+    // Star count dramatically affects chime frequency
+    // 0-3 stars: chimes are very rare (3x interval), world feels silent
+    // 15+ stars: chimes are more frequent (0.6x interval)
+    if (starCount <= 3) {
+      baseInterval *= 2.5 + (1 - starCount / 3) * 1.5 // 2.5x-4x slower
+    } else if (starCount > 15) {
+      baseInterval *= 0.6 // faster chimes in bright world
+    } else {
+      // 3-15: linear interpolation
+      const t = (starCount - 3) / 12
+      baseInterval *= 2.5 - t * 1.9 // 2.5x → 0.6x
+    }
+
     // ±30% jitter for organic feel
     const jitter = baseInterval * (0.7 + Math.random() * 0.6)
 
@@ -201,7 +216,10 @@ export class AudioEngine {
         this.scheduleChime()
         return
       }
-      this.playChime(beauty, hostility, corruption, alive)
+      // Skip chimes entirely when stars are 0-1 (silence of the void)
+      if (starCount >= 2) {
+        this.playChime(beauty, hostility, corruption, alive)
+      }
       this.scheduleChime()
     }, jitter)
   }
@@ -521,68 +539,79 @@ export class AudioEngine {
     if (params.corruptionSpread) this.playCorruptionSpread()
     if (params.cleanseSuccess) this.playCleanseSuccess()
 
-    // --- Drone: dramatically shift with karma ---
+    // --- Drone: dramatically shift with karma AND star count ---
+    const stars = params.starCount ?? 0
+    const starBrightness = Math.min(1, stars / 15) // 0→1 over 15 stars
+
     if (this.droneFilter && (
       Math.abs((last.beauty ?? 0) - params.beauty) > DELTA ||
       Math.abs((last.corruption ?? 0) - params.corruption) > DELTA ||
       Math.abs((last.hostility ?? 0) - params.hostility) > DELTA ||
-      Math.abs((params.mood?.audioWarmth ?? 0) - (last.mood?.audioWarmth ?? 0)) > DELTA
+      Math.abs((params.mood?.audioWarmth ?? 0) - (last.mood?.audioWarmth ?? 0)) > DELTA ||
+      Math.abs((last.starCount ?? 0) - stars) > 0.5
     )) {
       const warmth = params.mood.audioWarmth
 
-      // Beautiful (>0.6): D3 root, wide open filter 1200-2000Hz
-      // Corrupt (>0.5): E2 root, muffled 80-300Hz
-      // Neutral: moderate 300-600Hz
+      // Filter cutoff: star count has MAJOR influence
+      // Few stars (0-3): heavily muffled (40-120Hz) — dark, underwater
+      // Many stars (15+): bright open filter (1500-2500Hz)
+      // Karma still contributes but stars dominate
       let cutoff: number
-      if (params.beauty > 0.6) {
-        cutoff = 1200 + (params.beauty - 0.6) * 2000 + warmth * 300
+      if (stars <= 3) {
+        // Very few stars: extremely muffled regardless of karma
+        cutoff = 40 + stars * 25 + warmth * 20
+      } else if (params.beauty > 0.6) {
+        cutoff = 1200 + (params.beauty - 0.6) * 2000 + warmth * 300 + starBrightness * 500
       } else if (params.corruption > 0.5) {
-        cutoff = 80 + (1 - params.corruption) * 220
+        cutoff = 80 + (1 - params.corruption) * 220 + starBrightness * 100
       } else {
-        cutoff = 300 + warmth * 300 + params.beauty * 300
+        cutoff = 200 + warmth * 300 + params.beauty * 300 + starBrightness * 600
       }
-      this.droneFilter.frequency.setTargetAtTime(Math.max(60, cutoff), now, 2.5)
+      this.droneFilter.frequency.setTargetAtTime(Math.max(40, cutoff), now, 0.5)
 
-      // Q: beautiful = gentle (1.0), corrupt = harsh narrow (4-6)
-      const q = params.beauty > 0.6
+      // Q: beautiful = gentle (1.0), corrupt = harsh narrow (4-6), few stars = narrow muffled
+      let q = params.beauty > 0.6
         ? 0.8 + params.beauty * 0.3
         : params.corruption > 0.5
           ? 3.0 + params.corruption * 3.0
           : 1.5
-      this.droneFilter.Q.setTargetAtTime(q, now, 2.0)
+      // Few stars: tighter Q makes it more muffled
+      if (stars < 5) {
+        q = Math.max(q, 2.0 + (1 - stars / 5) * 3.0)
+      }
+      this.droneFilter.Q.setTargetAtTime(q, now, 0.5)
 
-      // Root frequencies shift based on state
-      // Beautiful: D3 (146.8) + A3 (220) + D2 (73.4)
-      // Corrupt: E2 (82.4) + Bb2 (116.5) — minor 2nd beating + tritone
-      // Hostile: drop pitch lower
+      // Root frequencies shift based on state + stars
+      // Few stars: drop everything lower (darker)
+      // Many stars: lift frequencies (brighter)
+      const starPitchShift = stars < 5 ? -(5 - stars) * 4 : starBrightness * 8
+
       if (params.corruption > 0.5) {
         const corr = params.corruption
-        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(82.4, now + 4.0)
-        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(87.3 + corr * 5, now + 4.0) // beating minor 2nd
-        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(116.5, now + 4.0) // tritone
-        // Switch osc1 to triangle for harsher timbre
+        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(Math.max(30, 82.4 + starPitchShift), now + 1.0)
+        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(Math.max(30, 87.3 + corr * 5 + starPitchShift), now + 1.0)
+        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(Math.max(30, 116.5 + starPitchShift), now + 1.0)
         if (this.droneOscs[1]) this.droneOscs[1].type = 'triangle'
       } else if (params.beauty > 0.6) {
-        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(146.8, now + 4.0)
-        // ±2 cents gentle chorus
-        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(220.0 + 0.25, now + 4.0)
-        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(73.4, now + 4.0)
+        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(146.8 + starPitchShift, now + 1.0)
+        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(220.0 + 0.25 + starPitchShift, now + 1.0)
+        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(73.4 + starPitchShift * 0.5, now + 1.0)
         if (this.droneOscs[1]) this.droneOscs[1].type = 'sine'
       } else {
-        // Neutral: gentle D root
         const hostDrop = params.hostility > 0.6 ? (params.hostility - 0.6) * 20 : 0
-        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(146.8 - hostDrop, now + 3.0)
-        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(220.0, now + 3.0)
-        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(73.4, now + 3.0)
+        this.droneOscs[0]?.frequency.exponentialRampToValueAtTime(Math.max(30, 146.8 - hostDrop + starPitchShift), now + 1.0)
+        this.droneOscs[1]?.frequency.exponentialRampToValueAtTime(Math.max(30, 220.0 + starPitchShift), now + 1.0)
+        this.droneOscs[2]?.frequency.exponentialRampToValueAtTime(Math.max(30, 73.4 + starPitchShift * 0.5), now + 1.0)
         if (this.droneOscs[1]) this.droneOscs[1].type = 'sine'
       }
 
-      // Volume: beauty = rich and full, corruption = thinner
+      // Volume: beauty + stars = rich and full, few stars = thin and quiet
+      const starVolMult = 0.4 + starBrightness * 0.6 // 0 stars = 40% vol, 15+ = 100%
       for (let i = 0; i < this.droneGains.length; i++) {
         const baseVol = i === 0 ? 0.10 : i === 1 ? 0.06 : 0.08
-        const beautyBoost = params.beauty > 0.6 ? 1.0 + (params.beauty - 0.6) * 2.5 : 0.5 + params.beauty * 0.8
-        const corruptionDrain = params.corruption > 0.5 ? 1.0 - (params.corruption - 0.5) * 0.4 : 1.0
-        this.droneGains[i].gain.setTargetAtTime(baseVol * beautyBoost * corruptionDrain, now, 2.0)
+        const beautyBoost = params.beauty > 0.6 ? 1.0 + (params.beauty - 0.6) * 3.5 : 0.3 + params.beauty * 0.8
+        const corruptionDrain = params.corruption > 0.5 ? 1.0 - (params.corruption - 0.5) * 0.6 : 1.0
+        this.droneGains[i].gain.setTargetAtTime(baseVol * beautyBoost * corruptionDrain * starVolMult, now, 0.5)
       }
     }
 
@@ -592,12 +621,12 @@ export class AudioEngine {
       const subVol = needSubBass
         ? 0.04 + Math.max(params.corruption - 0.5, 0) * 0.08 + Math.max(params.hostility - 0.6, 0) * 0.06
         : 0
-      this.subBassGain.gain.setTargetAtTime(subVol, now, 2.5)
+      this.subBassGain.gain.setTargetAtTime(subVol, now, 1.0)
       // Corruption: 18-25Hz, Hostility: 25-35Hz
       const subFreq = params.corruption > params.hostility
         ? 18 + params.corruption * 7
         : 25 + params.hostility * 10
-      this.subBassOsc.frequency.setTargetAtTime(subFreq, now, 2.5)
+      this.subBassOsc.frequency.setTargetAtTime(subFreq, now, 1.0)
     }
 
     // --- Noise: beautiful = high gentle breeze, corrupt = low rumbling static ---
@@ -624,9 +653,9 @@ export class AudioEngine {
         windVol = 0.010 + params.corruption * 0.015 + params.mood.windStrength * 0.006
       }
 
-      this.noiseFilter.frequency.setTargetAtTime(windFreq, now, 2.5)
-      this.noiseFilter.Q.setTargetAtTime(Math.max(0.3, windQ), now, 2.0)
-      this.noiseGain.gain.setTargetAtTime(windVol, now, 2.0)
+      this.noiseFilter.frequency.setTargetAtTime(windFreq, now, 1.0)
+      this.noiseFilter.Q.setTargetAtTime(Math.max(0.3, windQ), now, 0.8)
+      this.noiseGain.gain.setTargetAtTime(windVol, now, 0.8)
     }
 
     // Hover shimmer
@@ -654,9 +683,9 @@ export class AudioEngine {
       }
     }
 
-    // Master volume scales with energy
+    // Master volume — never drop too low so audio doesn't seem to "stop"
     if (this.master && Math.abs((last.playerEnergy ?? 1) - params.playerEnergy) > DELTA) {
-      const vol = 0.15 + params.playerEnergy * 0.1
+      const vol = 0.18 + params.playerEnergy * 0.07
       if (params.playerAlive) {
         this.master.gain.setTargetAtTime(this.muted ? 0 : vol, now, 0.5)
       }

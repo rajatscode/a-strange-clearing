@@ -116,8 +116,8 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
       return
     }
 
-    // Handle pot click if pot is active
-    if (world.pot.active && !world.pot.resolved) {
+    // Handle pot click if player has an active bond
+    if (world.pot.bonds.some(b => b.isPlayerBond && !b.resolved)) {
       handlePotClick(world.pot)
       clickedThisFrame.current = true
       return
@@ -177,14 +177,37 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
     handlePointerClick(e.clientX, e.clientY)
   }, [handlePointerClick])
 
+  // Touch: distinguish tap (click) from drag (move)
+  // Tap = touch + release within 200ms without moving much
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null)
+
   const handleTouchStart = useCallback((e: TouchEvent) => {
     e.preventDefault()
     if (e.touches.length > 0) {
       const touch = e.touches[0]
+      touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() }
       handlePointerMove(touch.clientX, touch.clientY)
-      handlePointerClick(touch.clientX, touch.clientY)
     }
-  }, [handlePointerMove, handlePointerClick])
+  }, [handlePointerMove])
+
+  const handleTouchEnd = useCallback((e: TouchEvent) => {
+    e.preventDefault()
+    const start = touchStartRef.current
+    if (!start) return
+    const elapsed = Date.now() - start.time
+    // Quick touch without much drag = tap (click)
+    if (elapsed < 300) {
+      const lastTouch = e.changedTouches[0]
+      if (lastTouch) {
+        const dx = lastTouch.clientX - start.x
+        const dy = lastTouch.clientY - start.y
+        if (dx * dx + dy * dy < 20 * 20) {
+          handlePointerClick(lastTouch.clientX, lastTouch.clientY)
+        }
+      }
+    }
+    touchStartRef.current = null
+  }, [handlePointerClick])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -216,12 +239,26 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
       }
     }
 
+    // God mode toggle: Shift+G (simple, reliable)
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.key === 'G' || e.key === 'g') && e.shiftKey && !e.metaKey && !e.ctrlKey) {
+        const world = worldRef.current
+        if (world) {
+          world.godMode = !world.godMode
+          console.log(world.godMode ? 'GOD MODE ON — fly freely' : 'God mode off')
+        }
+        e.preventDefault()
+      }
+    }
+
     resize()
     window.addEventListener('resize', resize)
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('click', handleClick)
+    window.addEventListener('keydown', handleKeyDown)
     canvas.addEventListener('touchmove', handleTouchMove, { passive: false })
     canvas.addEventListener('touchstart', handleTouchStart, { passive: false })
+    canvas.addEventListener('touchend', handleTouchEnd, { passive: false })
 
     let lastTime = 0
     function render(timestamp: number) {
@@ -253,6 +290,7 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
             transcendence: world.worldEvents.transcendence,
             corruptionSpread: world.worldEvents.corruptionSpread,
             cleanseSuccess: world.worldEvents.cleanseSuccess,
+            starCount: world.starField.stars.length,
           })
           clickedThisFrame.current = false
         }
@@ -278,14 +316,16 @@ export default function WorldCanvas({ onNavigate, muffled }: { onNavigate?: (rou
       window.removeEventListener('resize', resize)
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('click', handleClick)
+      window.removeEventListener('keydown', handleKeyDown)
       canvas.removeEventListener('touchmove', handleTouchMove)
       canvas.removeEventListener('touchstart', handleTouchStart)
+      canvas.removeEventListener('touchend', handleTouchEnd)
       if (audioRef.current) {
         audioRef.current.dispose()
         audioRef.current = null
       }
     }
-  }, [handleMouseMove, handleClick, handleTouchMove, handleTouchStart])
+  }, [handleMouseMove, handleClick, handleTouchMove, handleTouchStart, handleTouchEnd])
 
   useEffect(() => {
     if (audioRef.current) {
@@ -331,7 +371,7 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   // Compute reachable leaves for visual feedback
   const reach = getReach(world.centipede)
   let reachableArr: number[] = []
-  if (world.centipede.targetLeaf === -1) {
+  {
     if (world.centipede.currentLeaf >= 0) {
       // On a leaf: use neighbor-based reachable
       reachableArr = getReachableLeaves(world.tree, world.centipede.currentLeaf, reach)
@@ -351,21 +391,16 @@ function draw(ctx: CanvasRenderingContext2D, world: WorldState, w: number, h: nu
   }
   const reachableSet = new Set(reachableArr)
 
-  drawTree(ctx, world.tree, cam, w, h, world.time, world.scale, reachableSet, world.centipede.currentLeaf)
+  drawTree(ctx, world.tree, cam, w, h, world.time, world.scale, reachableSet, world.centipede.currentLeaf, starCount)
 
   // Atmosphere fog overlay — after tree, before agents
   drawAtmosphere(ctx, w, h, cam, karma, starCount, world.time)
 
   drawAgents(ctx, world.agents, world.time, world.scale, cam, w, h)
 
-  // Pot interaction visual — after agents, before player centipede
-  if (world.pot.active) {
-    const playerHead = getHeadPosition(world.centipede)
-    const agent = world.agents.agents[world.pot.agentIndex]
-    if (agent) {
-      const agentHead = { x: agent.centipede.segments[0].x, y: agent.centipede.segments[0].y }
-      drawPot(ctx, world.pot, playerHead, agentHead, world.time, world.scale)
-    }
+  // Bond interaction visuals — after agents, before player centipede
+  if (world.pot.bonds.length > 0) {
+    drawPot(ctx, world.pot, world.centipede, world.agents, world.time, world.scale, cam, w, h)
   }
 
   drawCentipede(ctx, world.centipede, world.time, world.scale, cam, w, h, true)
